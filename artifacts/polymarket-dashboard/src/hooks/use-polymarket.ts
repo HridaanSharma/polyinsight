@@ -5,7 +5,6 @@ export interface GammaMarket {
   question: string;
   conditionId: string;
   slug: string;
-  resolutionSource: string;
   endDate: string;
   volume: number;
   volume24hr: number;
@@ -13,11 +12,25 @@ export interface GammaMarket {
   createdAt: string;
   active: boolean;
   closed: boolean;
-  clobTokenIds: string;
+  clobTokenIds: string | string[];
   outcomePrices: string;
   lastTradePrice: number;
+  bestBid: number;
+  bestAsk: number;
+  spread: number;
   priceChange: number;
   eventSlug: string;
+}
+
+export interface GammaEvent {
+  id: string;
+  title: string;
+  slug: string;
+  volume: number;
+  volume24hr: number;
+  active: boolean;
+  closed: boolean;
+  markets: GammaMarket[];
 }
 
 export interface OrderbookEntry {
@@ -39,17 +52,42 @@ export interface SpreadData {
 
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 
+export function useActiveEvents() {
+  return useQuery({
+    queryKey: ["gamma-events"],
+    queryFn: async (): Promise<GammaEvent[]> => {
+      const res = await fetch(`${BASE}/api/polymarket/events?limit=50&active=true&closed=false`);
+      if (!res.ok) throw new Error("Failed to fetch events");
+      const data = await res.json();
+      const events: GammaEvent[] = Array.isArray(data) ? data : [];
+      return events.filter(e => e.active !== false && e.closed !== true);
+    },
+    refetchInterval: 30000,
+  });
+}
+
 export function useActiveMarkets() {
   return useQuery({
     queryKey: ["gamma-markets"],
     queryFn: async (): Promise<GammaMarket[]> => {
-      const res = await fetch(`${BASE}/api/polymarket/markets?limit=100&active=true`);
+      const res = await fetch(`${BASE}/api/polymarket/markets?limit=100&active=true&closed=false`);
       if (!res.ok) throw new Error("Failed to fetch markets");
       const data = await res.json();
-      return Array.isArray(data) ? data : [];
+      const markets: GammaMarket[] = Array.isArray(data) ? data : [];
+      return markets.filter(m => m.active !== false && m.closed !== true);
     },
     refetchInterval: 30000,
   });
+}
+
+function getTokenId(market: GammaMarket): string | null {
+  try {
+    if (Array.isArray(market.clobTokenIds)) return market.clobTokenIds[0] ?? null;
+    const parsed = JSON.parse(market.clobTokenIds as string || "[]");
+    return parsed[0] ?? null;
+  } catch {
+    return null;
+  }
 }
 
 export function useSpreadScanner(markets: GammaMarket[]) {
@@ -62,8 +100,7 @@ export function useSpreadScanner(markets: GammaMarket[]) {
 
       const promises = top50.map(async (market) => {
         try {
-          const tokens = JSON.parse(market.clobTokenIds || "[]");
-          const tokenId = tokens[0];
+          const tokenId = getTokenId(market);
           if (!tokenId) return null;
 
           const res = await fetch(`${BASE}/api/polymarket/book?token_id=${encodeURIComponent(tokenId)}`);
@@ -73,33 +110,27 @@ export function useSpreadScanner(markets: GammaMarket[]) {
           const bids = data.bids || [];
           const asks = data.asks || [];
 
-          const bestBid = bids.length > 0
-            ? Math.max(...bids.map(b => parseFloat(b.price)))
-            : 0;
+          if (bids.length === 0 || asks.length === 0) return null;
 
-          const bestAsk = asks.length > 0
-            ? Math.min(...asks.map(a => parseFloat(a.price)))
-            : 1;
+          const bestBid = parseFloat(bids[0].price);
+          const bestAsk = parseFloat(asks[0].price);
+
+          if (isNaN(bestBid) || isNaN(bestAsk)) return null;
 
           const spread = Math.max(0, bestAsk - bestBid);
 
-          return {
-            market,
-            bestBid,
-            bestAsk,
-            spread
-          } as SpreadData;
-        } catch (error) {
-          console.error(`Error fetching orderbook for ${market.id}:`, error);
+          return { market, bestBid, bestAsk, spread } as SpreadData;
+        } catch {
           return null;
         }
       });
 
       const results = await Promise.all(promises);
-      return results.filter((res): res is SpreadData => res !== null)
+      return results
+        .filter((r): r is SpreadData => r !== null)
         .sort((a, b) => b.spread - a.spread);
     },
     enabled: markets.length > 0,
-    refetchInterval: 10000,
+    refetchInterval: 15000,
   });
 }

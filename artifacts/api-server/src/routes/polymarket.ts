@@ -8,7 +8,10 @@ const CLOB_BASE = "https://clob.polymarket.com";
 async function proxyGet(url: string, res: any) {
   try {
     const response = await fetch(url, {
-      headers: { "Accept": "application/json" },
+      headers: {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+      },
     });
     if (!response.ok) {
       res.status(response.status).json({ error: `Upstream error: ${response.status}` });
@@ -21,10 +24,18 @@ async function proxyGet(url: string, res: any) {
   }
 }
 
+router.get("/polymarket/events", async (req, res) => {
+  const limit = req.query.limit ?? 50;
+  const active = req.query.active ?? "true";
+  const closed = req.query.closed ?? "false";
+  await proxyGet(`${GAMMA_BASE}/events?limit=${limit}&active=${active}&closed=${closed}`, res);
+});
+
 router.get("/polymarket/markets", async (req, res) => {
   const limit = req.query.limit ?? 100;
   const active = req.query.active ?? "true";
-  await proxyGet(`${GAMMA_BASE}/markets?limit=${limit}&active=${active}`, res);
+  const closed = req.query.closed ?? "false";
+  await proxyGet(`${GAMMA_BASE}/markets?limit=${limit}&active=${active}&closed=${closed}`, res);
 });
 
 router.get("/polymarket/book", async (req, res) => {

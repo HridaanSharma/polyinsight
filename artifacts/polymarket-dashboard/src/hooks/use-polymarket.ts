@@ -22,6 +22,7 @@ export interface GammaMarket {
   oneDayPriceChange: number;
   priceChange: number;
   eventSlug: string;
+  events?: Array<{ id: string; slug: string; title?: string }>;
 }
 
 export interface GammaEvent {

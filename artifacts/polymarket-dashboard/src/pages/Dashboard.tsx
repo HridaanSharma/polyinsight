@@ -1,7 +1,7 @@
 import React, { useState } from "react"
 import { motion, AnimatePresence } from "framer-motion"
 import { RefreshCcw, Activity, Zap, ShieldAlert } from "lucide-react"
-import { useActiveEvents, useActiveMarkets, useSpreadScanner } from "@/hooks/use-polymarket"
+import { useActiveMarkets, useSpreadScanner } from "@/hooks/use-polymarket"
 import { EventGroupsTab } from "@/components/dashboard/EventGroupsTab"
 import { VolumeSpikesTab } from "@/components/dashboard/VolumeSpikesTab"
 import { SpreadScannerTab } from "@/components/dashboard/SpreadScannerTab"
@@ -13,13 +13,6 @@ export default function Dashboard() {
   const [activeTab, setActiveTab] = useState<TabId>("events");
 
   const {
-    data: events = [],
-    isLoading: eventsLoading,
-    refetch: refetchEvents,
-    isRefetching: eventsRefetching,
-  } = useActiveEvents();
-
-  const {
     data: markets = [],
     isLoading: marketsLoading,
     refetch: refetchMarkets,
@@ -28,16 +21,12 @@ export default function Dashboard() {
 
   const spreads = useSpreadScanner(markets);
 
-  const handleRefresh = () => {
-    if (activeTab === "events") refetchEvents();
-    else refetchMarkets();
-  };
+  const handleRefresh = () => refetchMarkets();
 
-  const isGlobalLoading = activeTab === "events" ? eventsLoading : marketsLoading;
-  const isCurrentTabRefetching =
-    activeTab === "events" ? eventsRefetching : marketsRefetching;
+  const isGlobalLoading = marketsLoading;
+  const isCurrentTabRefetching = marketsRefetching;
 
-  const totalMarkets = events.reduce((sum, e) => sum + (e.markets?.length || 0), 0);
+  const totalMarkets = markets.length;
 
   const tabs = [
     { id: "events" as TabId, label: "Event Groups", icon: Activity },
@@ -109,7 +98,7 @@ export default function Dashboard() {
           <div className="flex flex-col items-center justify-center py-32 space-y-4">
             <div className="w-12 h-12 border-4 border-primary/20 border-t-primary rounded-full animate-spin" />
             <p className="text-muted-foreground font-mono animate-pulse">
-              {activeTab === "events" ? "Loading events from Gamma API..." : "Fetching markets..."}
+              Fetching markets from Gamma API...
             </p>
           </div>
         ) : (
@@ -121,7 +110,7 @@ export default function Dashboard() {
               exit={{ opacity: 0, y: -10 }}
               transition={{ duration: 0.2 }}
             >
-              {activeTab === "events" && <EventGroupsTab events={events} />}
+              {activeTab === "events" && <EventGroupsTab markets={markets} />}
               {activeTab === "spikes" && <VolumeSpikesTab markets={markets} />}
               {activeTab === "spreads" && (
                 <SpreadScannerTab

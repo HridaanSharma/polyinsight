@@ -26,24 +26,16 @@ export default function Dashboard() {
     isRefetching: marketsRefetching,
   } = useActiveMarkets();
 
-  const {
-    data: spreads = [],
-    isLoading: spreadsLoading,
-    refetch: refetchSpreads,
-    isRefetching: spreadsRefetching,
-  } = useSpreadScanner(markets);
+  const spreads = useSpreadScanner(markets);
 
   const handleRefresh = () => {
-    if (activeTab === "events") { refetchEvents(); }
-    else if (activeTab === "spikes") { refetchMarkets(); }
-    else { refetchSpreads(); }
+    if (activeTab === "events") refetchEvents();
+    else refetchMarkets();
   };
 
   const isGlobalLoading = activeTab === "events" ? eventsLoading : marketsLoading;
   const isCurrentTabRefetching =
-    activeTab === "events" ? eventsRefetching :
-    activeTab === "spikes" ? marketsRefetching :
-    spreadsRefetching;
+    activeTab === "events" ? eventsRefetching : marketsRefetching;
 
   const totalMarkets = events.reduce((sum, e) => sum + (e.markets?.length || 0), 0);
 
@@ -134,8 +126,8 @@ export default function Dashboard() {
               {activeTab === "spreads" && (
                 <SpreadScannerTab
                   spreads={spreads}
-                  isLoading={spreadsLoading || spreadsRefetching}
-                  onRefresh={refetchSpreads}
+                  isRefreshing={marketsRefetching}
+                  onRefresh={refetchMarkets}
                 />
               )}
             </motion.div>

@@ -1,0 +1,51 @@
+Build a Polymarket Intelligence Dashboard as a single HTML file with vanilla JS. No backend needed — call Polymarket's public APIs directly from the browser.
+APIs to use:
+
+Gamma API: https://gamma-api.polymarket.com/markets?limit=100&active=true
+CLOB API for orderbook: https://clob.polymarket.com/book?token_id={tokenId}
+CLOB API for price history: https://clob.polymarket.com/prices-history?market={conditionId}&interval=1h
+
+
+Feature 1: Event Knowledge Graph
+
+Fetch all active markets from Gamma API
+Group markets by their eventSlug field — markets sharing the same event slug are related
+Display as a card-based UI: one card per event group, showing all related markets inside it
+Inside each group, highlight which markets have moved more than 5% in the last 24h (use priceChange field from Gamma response) and which haven't moved at all — label the non-movers as "hasn't repriced yet" in orange
+Add a search bar to filter by topic keyword
+
+
+Feature 2: Unusual Volume Spike Detector
+
+From the Gamma API response, each market has volume24hr and volumeClob fields
+Calculate a spike score: volume24hr / (volumeClob / days_since_creation)
+If spike score > 5x the market's own baseline, flag it as "unusual activity" with a red badge
+Show these flagged markets in a dedicated "🚨 Unusual Activity" section at the top of the page
+Sort by spike magnitude, highest first
+
+
+Feature 3: Spread Scanner
+
+For the top 50 markets by volume, fetch the orderbook from CLOB API: GET https://clob.polymarket.com/book?token_id={tokenId}
+Calculate spread = best ask price - best bid price
+Display a live table: Market name | Best Bid | Best Ask | Spread | "Earn this spread" CTA
+Sort by spread descending (widest spread = most opportunity)
+Color code: spread > $0.08 = green (good opportunity), $0.04-0.08 = yellow, under $0.04 = gray
+
+
+UI layout:
+
+Dark theme
+Three tabs at the top: "Event Groups" | "Volume Spikes" | "Spread Scanner"
+Each tab loads its data independently
+Show a loading spinner while fetching
+Refresh button on each tab
+All data displayed in clean cards with market name, current probability shown as a progress bar, and volume
+
+
+Important notes for the agent:
+
+Use Promise.all() to fetch multiple orderbooks in parallel, not sequentially
+Add catch blocks on every fetch — if one market's orderbook fails, skip it and continue
+CORS should work fine since Polymarket's APIs are public
+No API key needed for any of these endpoints

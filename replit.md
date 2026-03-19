@@ -48,6 +48,17 @@ Every package extends `tsconfig.base.json` which sets `composite: true`. The roo
 - `pnpm run build` — runs `typecheck` first, then recursively runs `build` in all packages that define it
 - `pnpm run typecheck` — runs `tsc --build --emitDeclarationOnly` using project references
 
+## Artifacts
+
+### `artifacts/polymarket-dashboard` (`@workspace/polymarket-dashboard`)
+
+Polymarket Intelligence Dashboard — a React + Vite frontend that calls Polymarket's public APIs (via an Express proxy to avoid CORS issues). Three tabs:
+1. **Event Groups** — markets grouped by eventSlug, with price change labels and "Hasn't repriced yet" orange indicators
+2. **Volume Spikes** — unusual activity detection using spike score (volume24hr / avg daily volume)
+3. **Spread Scanner** — live orderbook spread data from CLOB API for top 50 markets by volume
+
+Proxied through `/api/polymarket/*` routes on the API server.
+
 ## Packages
 
 ### `artifacts/api-server` (`@workspace/api-server`)

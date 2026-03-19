@@ -1,0 +1,11 @@
+packages:
+  "framer-motion": "Animations for progress bars and tab transitions"
+  "date-fns": "For date formatting in the dashboard"
+  "lucide-react": "Icons for the UI"
+  "clsx": "Utility for constructing className strings"
+  "tailwind-merge": "Utility for merging tailwind classes safely"
+
+notes:
+  - This app connects directly to Polymarket's public Gamma and CLOB APIs.
+  - No backend proxy is needed; CORS is allowed by Polymarket.
+  - Using a fully custom dark financial theme.

@@ -1,0 +1,274 @@
+Tell your agent to replace the entire event groups section with this — every single line:
+
+---
+
+```javascript
+// ============================================
+// EVENT GROUPS — FULL REWRITE
+// ============================================
+
+const findAllChains = async () => {
+  showLoading('event-groups')
+
+  // STEP 1: Fresh fetch with cache bust
+  const res = await fetch(
+    '/proxy/gamma/markets?active=true&closed=false&limit=500&order=volume24hr&ascending=false&_t=' + Date.now()
+  )
+  const all = await res.json()
+
+  console.log('Total markets fetched:', all.length)
+
+  // STEP 2: Filter meaningful markets
+  const meaningful = all.filter(m => {
+    try {
+      const yes = parseFloat(JSON.parse(m.outcomePrices)[0])
+      const vol24 = parseFloat(m.volume24hr || 0)
+      return yes > 0.05 && yes < 0.95 &&
+        vol24 > 5000 &&
+        m.active === true &&
+        m.closed === false
+    } catch { return false }
+  })
+
+  console.log('Meaningful markets:', meaningful.length)
+  console.log('Top 5:', meaningful.slice(0,5).map(m => m.question))
+
+  // STEP 3: Take top 200 by volume
+  const top200 = meaningful
+    .sort((a,b) => parseFloat(b.volume24hr) - parseFloat(a.volume24hr))
+    .slice(0, 200)
+
+  // STEP 4: Build market list string for Claude
+  const buildMarketList = (markets) => markets.map((m, i) => {
+    const yes = parseFloat(JSON.parse(m.outcomePrices)[0])
+    const vol = parseFloat(m.volume24hr)
+    const change = parseFloat(m.priceChange24h || 0)
+    return `${i}. "${m.question}" | YES:${(yes*100).toFixed(1)}% | Vol:$${(vol/1000).toFixed(0)}K | 24hChange:${(change*100).toFixed(1)}%`
+  }).join('\n')
+
+  // STEP 5: Claude prompt — comprehensive with many examples
+  const claudePrompt = (marketList, batchNum) => `You are a senior macro trader and political analyst. You are looking at LIVE Polymarket prediction markets.
+
+Here are ${marketList.split('\n').length} active markets (Batch ${batchNum}):
+${marketList}
+
+YOUR TASK: Find pairs or groups of markets from COMPLETELY DIFFERENT topics that are causally connected. A trader betting on one of these should ALSO be looking at the other.
+
+=== WHAT WE WANT: CROSS-TOPIC CAUSAL CHAINS ===
+
+The value is finding markets from different sections of Polymarket that move together in real life but are listed separately on the platform. A trader seeing only one side is missing the full picture.
+
+=== MANY EXAMPLES OF VALID CHAINS ===
+
+CONFLICT → COMMODITY:
+- "US invades Iran" + "Crude oil hits $100" → invasion disrupts Hormuz, oil spikes immediately
+- "Iran ceasefire signed" + "Crude oil below $80" → ceasefire removes risk premium, oil drops
+- "Ukraine ceasefire" + "European natural gas below $X" → war end restores pipeline supply
+- "Israel attacks Lebanon" + "Oil above $100" → Middle East escalation = supply fear
+
+MONETARY POLICY → ASSET PRICES:
+- "Fed holds rates in April" + "Bitcoin dips to $X" → high rates = risk-off = crypto sells
+- "Fed cuts rates" + "Bitcoin reaches $X" → rate cuts = risk-on = crypto rallies
+- "Fed holds rates" + "S&P500 drops" → tight policy pressures equities
+- "US inflation above 3%" + "Fed cuts rates" → these are logically inconsistent if both high
+
+POLITICS → POLICY OUTCOMES:
+- "Democrats win Senate majority" + "Climate bill passes" → need Senate to pass legislation
+- "Republicans win House" + "Tax cuts extended" → house controls budget legislation
+- "Trump wins election" + "US rejoins Paris Agreement" → opposite directions
+- "Democrats win Senate" + "Minimum wage increase" → direct legislative path
+
+TRADE POLICY → ECONOMICS:
+- "Trump imposes 25% tariffs on China" + "China GDP growth below 4%" → tariffs directly hurt Chinese exports
+- "Trump tariffs on EU" + "Euro weakens against dollar" → trade war = currency pressure
+- "US trade war escalates" + "Recession by 2026" → trade disruption = economic slowdown
+
+GEOPOLITICAL → DIPLOMATIC:
+- "China invades Taiwan" + "Trump visits China" → invasion makes diplomatic visit impossible
+- "Iran regime falls" + "Netanyahu survives politically" → Iran collapse removes his main threat
+- "Russia-Ukraine ceasefire" + "NATO expands" → peace changes alliance dynamics
+- "North Korea nuclear test" + "US-China relations improve" → shared threat can unite rivals
+
+LEADERSHIP → MARKET:
+- "Putin leaves power" + "Ukraine ceasefire" → new Russian leader might negotiate
+- "Netanyahu removed" + "Israel-Gaza ceasefire" → leadership change enables deal
+- "Iran leadership change" + "Iran nuclear deal" → new leader could reopen negotiations
+
+FINANCIAL CONTAGION:
+- "US debt ceiling crisis" + "Dollar index drops" → default fear weakens dollar
+- "US government shutdown" + "S&P500 drops" → shutdown = economic uncertainty
+- "Argentina defaults" + "Emerging market ETF drops" → contagion effect
+
+=== WHAT TO ABSOLUTELY NEVER DO ===
+
+NEVER group these — they are always wrong:
+- Sports games (basketball, soccer, hockey, baseball) with ANYTHING political or financial
+- Elon Musk tweet counting with ANYTHING
+- Eurovision/F1/sports championships with geopolitics
+- UFO/alien disclosure with anything
+- Multiple Bitcoin price targets together (same topic)
+- Multiple Iran markets together (same topic)  
+- Multiple Fed rate markets together (same topic)
+- Multiple oil price targets together (same topic)
+- "Iran conflict" + "Bitcoin" — too many steps between them, not direct
+- "War" + "stock market" — too vague, not a direct single-step mechanism
+
+=== VALIDATION CHECKLIST ===
+Before including any group, verify:
+✓ Are the two sides from genuinely different topics? (conflict ≠ commodity ≠ politics ≠ policy)
+✓ Is there ONE direct real-world mechanism connecting them?
+✓ Would a trader on side A DIRECTLY care about side B?
+✓ Are ALL indices valid numbers that exist in the list above?
+✓ Does each side have at least 2 markets?
+
+Return ONLY a JSON array. No explanation. No markdown. No extra text. Just the JSON:
+[
+  {
+    "theme": "Specific Cause → Specific Direct Effect",
+    "emoji": "one relevant emoji",
+    "description": "One sentence: the exact real-world mechanism (e.g. 'US invasion disrupts Hormuz Strait oil exports, immediately spiking crude prices')",
+    "sideA_label": "CAUSE IN CAPS (3-4 words)",
+    "sideA_indices": [0, 3, 7],
+    "sideB_label": "EFFECT IN CAPS (3-4 words)",
+    "sideB_indices": [12, 15, 23]
+  }
+]`
+
+  // STEP 6: Send 4 batches of 50 in parallel to Claude
+  const batch1 = top200.slice(0, 50)
+  const batch2 = top200.slice(50, 100)
+  const batch3 = top200.slice(100, 150)
+  const batch4 = top200.slice(150, 200)
+
+  const callClaude = async (markets, batchNum) => {
+    if (markets.length === 0) return []
+    try {
+      const response = await fetch('/proxy/claude', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-20250514',
+          max_tokens: 4000,
+          messages: [{
+            role: 'user',
+            content: claudePrompt(buildMarketList(markets), batchNum)
+          }]
+        })
+      })
+
+      const data = await response.json()
+      if (!data.content?.[0]?.text) {
+        console.error('Claude returned no content for batch', batchNum, data)
+        return []
+      }
+
+      const text = data.content[0].text.trim()
+      console.log(`Batch ${batchNum} Claude raw response:`, text.substring(0, 200))
+
+      const clean = text.replace(/```json|```/g, '').trim()
+      const chains = JSON.parse(clean)
+      console.log(`Batch ${batchNum} found ${chains.length} chains`)
+
+      return chains.map(chain => {
+        const sideAMarkets = (chain.sideA_indices || [])
+          .filter(i => Number.isInteger(i) && i >= 0 && i < markets.length)
+          .map(i => markets[i])
+          .filter(Boolean)
+
+        const sideBMarkets = (chain.sideB_indices || [])
+          .filter(i => Number.isInteger(i) && i >= 0 && i < markets.length)
+          .map(i => markets[i])
+          .filter(Boolean)
+
+        // Need at least 2 markets on each side
+        if (sideAMarkets.length < 2 || sideBMarkets.length < 2) return null
+
+        const sideAText = sideAMarkets.map(m => m.question.toLowerCase()).join(' ')
+        const sideBText = sideBMarkets.map(m => m.question.toLowerCase()).join(' ')
+        const allText = sideAText + ' ' + sideBText
+
+        // Hard reject same-topic groups
+        const sameTopicWords = [
+          'iran', 'bitcoin', 'crude oil', 'federal reserve',
+          'fed rate', 'israel', 'ukraine', 'taiwan', 'ethereum',
+          'trump tariff', 'election 2026'
+        ]
+        for (const topic of sameTopicWords) {
+          if (sideAText.includes(topic) && sideBText.includes(topic)) {
+            console.log(`Rejected same-topic chain: ${chain.theme} (topic: ${topic})`)
+            return null
+          }
+        }
+
+        // Hard reject sports/noise
+        const noiseWords = [
+          ' vs ', ' vs. ', 'tweets from', 'o/u ',
+          'win on 2026', 'win on 2025', 'eurovision',
+          'drivers champion', 'alien', 'ufo', 'game handicap'
+        ]
+        if (noiseWords.some(kw => allText.includes(kw))) {
+          console.log(`Rejected noise chain: ${chain.theme}`)
+          return null
+        }
+
+        const allMkts = [...sideAMarkets, ...sideBMarkets]
+        const totalVol = allMkts.reduce((s, m) =>
+          s + parseFloat(m.volume24hr || 0), 0)
+
+        const movedMarkets = allMkts.filter(m =>
+          Math.abs(parseFloat(m.priceChange24h || 0)) > 0.03
+        )
+
+        return {
+          theme: chain.theme,
+          emoji: chain.emoji || '🔗',
+          description: chain.description,
+          sideA: { label: chain.sideA_label, markets: sideAMarkets },
+          sideB: { label: chain.sideB_label, markets: sideBMarkets },
+          totalVol,
+          movedCount: movedMarkets.length,
+          hasMovement: movedMarkets.length > 0
+        }
+      }).filter(Boolean)
+
+    } catch(e) {
+      console.error(`Batch ${batchNum} error:`, e)
+      return []
+    }
+  }
+
+  // STEP 7: Run all 4 batches in parallel
+  const [chains1, chains2, chains3, chains4] = await Promise.all([
+    callClaude(batch1, 1),
+    callClaude(batch2, 2),
+    callClaude(batch3, 3),
+    callClaude(batch4, 4)
+  ])
+
+  console.log('Chains per batch:', chains1.length, chains2.length, chains3.length, chains4.length)
+
+  // STEP 8: Combine, deduplicate, sort
+  const allChains = [...chains1, ...chains2, ...chains3, ...chains4]
+    .filter((c, i, arr) => {
+      // Deduplicate by theme
+      if (arr.findIndex(x => x.theme === c.theme) !== i) return false
+
+      // Deduplicate if sideA markets are identical to existing chain
+      const sideAIds = c.sideA.markets.map(m => m.conditionId).sort().join(',')
+      const firstMatch = arr.findIndex(x => {
+        const xIds = x.sideA.markets.map(m => m.conditionId).sort().join(',')
+        return xIds === sideAIds
+      })
+      return firstMatch === i
+    })
+    .sort((a, b) => b.totalVol - a.totalVol)
+    .slice(0, 25)
+
+  console.log('Total valid chains after dedup:', allChains.length)
+
+  // STEP 9: Render
+  renderChains(allChains)
+}
+```
+
+**Do not change volume spikes. Do not change spread scanner. Do not change proxy routes. Do not change renderChains display function. Do not change trade button URLs. Only replace the findAllChains function with the code above.**

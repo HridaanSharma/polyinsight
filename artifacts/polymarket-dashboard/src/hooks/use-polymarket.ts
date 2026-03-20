@@ -131,65 +131,94 @@ function buildChainPrompt(batch: GammaMarket[], offset: number): string {
     .map((m, i) => {
       const yes = parseFloat(JSON.parse(m.outcomePrices || '["0.5"]')[0]);
       const vol = parseFloat(m.volume24hr as any) || 0;
-      return `${offset + i}. "${m.question}" | YES:${(yes * 100).toFixed(1)}% | 24hVol:$${(vol / 1000).toFixed(0)}K`;
+      const change = parseFloat((m.oneDayPriceChange ?? m.priceChange ?? 0) as any) || 0;
+      return `${offset + i}. "${m.question}" | YES:${(yes * 100).toFixed(1)}% | Vol:$${(vol / 1000).toFixed(0)}K | 24hChange:${(change * 100).toFixed(1)}%`;
     })
     .join("\n");
 
-  return `You are a senior macro trader analyzing live prediction markets for causal mispricings.
+  return `You are a senior macro trader and political analyst. You are looking at LIVE Polymarket prediction markets.
 
-Here are active Polymarket markets right now:
+Here are ${batch.length} active markets (indices ${offset}–${offset + batch.length - 1}):
 ${marketList}
 
-Find groups where markets from COMPLETELY DIFFERENT topics are causally connected — meaning if one market moves, the other should logically reprice but may not have yet.
+YOUR TASK: Find pairs or groups of markets from COMPLETELY DIFFERENT topics that are causally connected. A trader betting on one of these should ALSO be looking at the other.
 
-STRICT RULES — read every single one:
+=== WHAT WE WANT: CROSS-TOPIC CAUSAL CHAINS ===
 
-1. MUST cross completely different topics. Examples of valid crosses:
-   - Military conflict + commodity prices (invasion disrupts supply)
-   - Central bank policy + asset prices (rates affect valuations)
-   - Election outcome + legislation (who wins determines what passes)
-   - Trade policy + economic indicators (tariffs affect GDP)
-   - Geopolitical event + diplomatic relations (war ends diplomacy)
-   - Leadership change + regional stability (new leader changes policy)
+The value is finding markets from different sections of Polymarket that move together in real life but are listed separately on the platform. A trader seeing only one side is missing the full picture.
 
-2. The causal mechanism must be DIRECT — one step, not three steps.
-   "A causes B" is valid. "A causes C which causes D which affects B" is NOT valid.
+=== MANY EXAMPLES OF VALID CHAINS ===
 
-3. NEVER group these together — they are always invalid:
-   - Sports games with ANYTHING (soccer, basketball, hockey are self-contained)
-   - UFO/alien markets with ANYTHING
-   - Tweet counting markets with ANYTHING
-   - Bitcoin price targets with Iran conflict (too indirect)
-   - Bitcoin price targets with Bitcoin price targets (same topic)
-   - Iran markets with Iran markets (same topic)
-   - Oil price targets with oil price targets (same topic)
-   - Fed rate markets with Fed rate markets (same topic)
+CONFLICT → COMMODITY:
+- "US invades Iran" + "Crude oil hits $100" → invasion disrupts Hormuz, oil spikes immediately
+- "Iran ceasefire signed" + "Crude oil below $80" → ceasefire removes risk premium, oil drops
+- "Ukraine ceasefire" + "European natural gas below $X" → war end restores pipeline supply
+- "Israel attacks Lebanon" + "Oil above $100" → Middle East escalation = supply fear
 
-4. Bitcoin is ONLY valid on the EFFECT side when paired with:
-   - Fed rate decisions (direct: rates affect risk assets)
-   - US debt ceiling/default (direct: dollar crisis affects crypto)
-   - Never with geopolitical conflicts
+MONETARY POLICY → ASSET PRICES:
+- "Fed holds rates in April" + "Bitcoin dips to $X" → high rates = risk-off = crypto sells
+- "Fed cuts rates" + "Bitcoin reaches $X" → rate cuts = risk-on = crypto rallies
+- "Fed holds rates" + "S&P500 drops" → tight policy pressures equities
+- "US inflation above 3%" + "Fed cuts rates" → these are logically inconsistent if both high
 
-5. Oil is ONLY valid on the EFFECT side when paired with:
-   - Iran/Hormuz conflict markets (direct: disrupts supply)
-   - Ukraine/Russia ceasefire (direct: restores energy supply)
-   - Never pair oil with oil
+POLITICS → POLICY OUTCOMES:
+- "Democrats win Senate majority" + "Climate bill passes" → need Senate to pass legislation
+- "Republicans win House" + "Tax cuts extended" → house controls budget legislation
+- "Trump wins election" + "US rejoins Paris Agreement" → opposite directions
+- "Democrats win Senate" + "Minimum wage increase" → direct legislative path
 
-6. Each group needs minimum 2 markets on EACH side
+TRADE POLICY → ECONOMICS:
+- "Trump imposes 25% tariffs on China" + "China GDP growth below 4%" → tariffs directly hurt Chinese exports
+- "Trump tariffs on EU" + "Euro weakens against dollar" → trade war = currency pressure
+- "US trade war escalates" + "Recession by 2026" → trade disruption = economic slowdown
 
-7. Every index must exist in the list above (${offset}–${offset + batch.length - 1}) — double check before returning
+GEOPOLITICAL → DIPLOMATIC:
+- "China invades Taiwan" + "Trump visits China" → invasion makes diplomatic visit impossible
+- "Iran regime falls" + "Netanyahu survives politically" → Iran collapse removes his main threat
+- "Russia-Ukraine ceasefire" + "NATO expands" → peace changes alliance dynamics
+- "North Korea nuclear test" + "US-China relations improve" → shared threat can unite rivals
 
-8. Find as many valid groups as the data supports — aim for 8-12 if the data allows
+LEADERSHIP → MARKET:
+- "Putin leaves power" + "Ukraine ceasefire" → new Russian leader might negotiate
+- "Netanyahu removed" + "Israel-Gaza ceasefire" → leadership change enables deal
+- "Iran leadership change" + "Iran nuclear deal" → new leader could reopen negotiations
 
-Return ONLY valid JSON, no other text, no markdown:
+FINANCIAL CONTAGION:
+- "US debt ceiling crisis" + "Dollar index drops" → default fear weakens dollar
+- "US government shutdown" + "S&P500 drops" → shutdown = economic uncertainty
+- "Argentina defaults" + "Emerging market ETF drops" → contagion effect
+
+=== WHAT TO ABSOLUTELY NEVER DO ===
+
+NEVER group these — they are always wrong:
+- Sports games (basketball, soccer, hockey, baseball) with ANYTHING political or financial
+- Elon Musk tweet counting with ANYTHING
+- Eurovision/F1/sports championships with geopolitics
+- UFO/alien disclosure with anything
+- Multiple Bitcoin price targets together (same topic)
+- Multiple Iran markets together (same topic)
+- Multiple Fed rate markets together (same topic)
+- Multiple oil price targets together (same topic)
+- "Iran conflict" + "Bitcoin" — too many steps between them, not direct
+- "War" + "stock market" — too vague, not a direct single-step mechanism
+
+=== VALIDATION CHECKLIST ===
+Before including any group, verify:
+✓ Are the two sides from genuinely different topics? (conflict ≠ commodity ≠ politics ≠ policy)
+✓ Is there ONE direct real-world mechanism connecting them?
+✓ Would a trader on side A DIRECTLY care about side B?
+✓ Are ALL indices valid numbers that exist in the list above (${offset}–${offset + batch.length - 1})?
+✓ Does each side have at least 2 markets?
+
+Return ONLY a JSON array. No explanation. No markdown. No extra text. Just the JSON:
 [
   {
-    "theme": "Specific Cause → Specific Effect",
-    "emoji": "single relevant emoji",
-    "description": "One sentence explaining the direct real-world mechanism",
-    "sideA_label": "CAUSE LABEL IN CAPS",
+    "theme": "Specific Cause → Specific Direct Effect",
+    "emoji": "one relevant emoji",
+    "description": "One sentence: the exact real-world mechanism",
+    "sideA_label": "CAUSE IN CAPS (3-4 words)",
     "sideA_indices": [${offset}, ${offset + 3}],
-    "sideB_label": "EFFECT LABEL IN CAPS",
+    "sideB_label": "EFFECT IN CAPS (3-4 words)",
     "sideB_indices": [${offset + 12}, ${offset + 20}]
   }
 ]`;
@@ -224,9 +253,10 @@ function filterChain(
   const allText = textA + " " + textB;
 
   // Hard reject: sports on either side
-  const SPORTS_KW = [" vs ", " vs. ", " @ ", "win on 202", "nba", "nfl", "nhl", "mlb",
-    "soccer", "football match", "basketball", "hockey game", "champions league",
-    "premier league", "world cup", "super bowl"];
+  const SPORTS_KW = [" vs ", " vs. ", " @ ", "win on 2026", "win on 2025", "nba", "nfl",
+    "nhl", "mlb", "soccer", "football match", "basketball", "hockey game",
+    "champions league", "premier league", "world cup", "super bowl",
+    "drivers champion", "game handicap", "o/u ", "over/under", "eurovision"];
   if (SPORTS_KW.some(kw => allText.includes(kw))) return null;
 
   // Hard reject: alien/UFO markets
@@ -239,10 +269,12 @@ function filterChain(
   // Hard reject: same topic on both sides
   const SAME_TOPIC_PAIRS: [string, string][] = [
     ["iran", "iran"], ["bitcoin", "bitcoin"], ["btc", "btc"],
-    ["oil", "oil"], ["crude", "crude"], ["fed ", "fed "],
+    ["crude oil", "crude oil"], ["oil price", "oil price"], ["crude", "crude"],
+    ["federal reserve", "federal reserve"], ["fed rate", "fed rate"], ["fed ", "fed "],
     ["interest rate", "interest rate"], ["israel", "israel"],
     ["ukraine", "ukraine"], ["taiwan", "taiwan"],
-    ["election", "election"], ["trump", "trump"],
+    ["election 2026", "election 2026"], ["trump tariff", "trump tariff"],
+    ["ethereum", "ethereum"], ["trump", "trump"],
   ];
   for (const [kA, kB] of SAME_TOPIC_PAIRS) {
     if (textA.includes(kA) && textB.includes(kB)) return null;
@@ -334,7 +366,7 @@ async function fetchAiChains(allMarkets: GammaMarket[]): Promise<CrossChain[]> {
       return true;
     })
     .sort((a, b) => b.totalVolume - a.totalVolume)
-    .slice(0, 20);
+    .slice(0, 25);
 }
 
 // ── Cross-category causal chains — fully AI-driven ───────────────────────────

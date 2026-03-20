@@ -1,232 +1,186 @@
 import React, { useMemo, useState } from "react"
-import { Search, Clock, TrendingUp, TrendingDown, AlertCircle } from "lucide-react"
+import { Search, AlertTriangle, TrendingUp, TrendingDown, Link2 } from "lucide-react"
 import { motion } from "framer-motion"
-import { GammaEvent, GammaMarket } from "@/hooks/use-polymarket"
+import { CorrelationGroup, CorrelatedMarket } from "@/hooks/use-polymarket"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
 import { formatCurrency, formatPercent, cn } from "@/lib/utils"
 
 interface EventGroupsTabProps {
-  events: GammaEvent[];
+  groups: CorrelationGroup[];
 }
 
-function getYesPrice(market: GammaMarket): number {
+function getYesPrice(outcomePrices: string): number {
   try {
-    const parsed = JSON.parse(market.outcomePrices || "[]");
+    const parsed = JSON.parse(outcomePrices || "[]");
     if (parsed.length > 0) return parseFloat(parsed[0]);
   } catch { /* ignore */ }
-  return market.lastTradePrice ?? 0;
+  return 0.5;
 }
 
-function isValuableGroup(event: GammaEvent): boolean {
-  const markets = (event.markets || []).filter(m => m.active !== false && m.closed !== true);
-  if (!markets || markets.length < 2) return false;
-
-  // Filter 1: Skip events dominated by sports micro-markets (spreads, O/U lines)
-  const sportsMicro = markets.filter(m => {
-    const q = m.question?.toLowerCase() ?? "";
-    return (
-      q.includes("o/u") ||
-      q.includes("over/under") ||
-      q.includes("-0.5") ||
-      q.includes("-1.5") ||
-      q.includes("-2.5") ||
-      q.includes("spread:")
-    );
-  });
-  if (sportsMicro.length / markets.length > 0.3) return false;
-
-  // Filter 2: Skip pure winner markets
-  const allWinner = markets.every(m => {
-    const q = m.question?.toLowerCase() ?? "";
-    return (
-      q.includes("win the") ||
-      q.includes("finish 1st") ||
-      q.includes("win the championship") ||
-      q.includes("win the series")
-    );
-  });
-  if (allWinner) return false;
-
-  // Filter 3: At least 2 genuinely uncertain markets (10–90%)
-  const uncertainCount = markets.filter(m => {
-    try {
-      const prices = JSON.parse(m.outcomePrices || '["0.5","0.5"]');
-      const yes = parseFloat(prices[0]);
-      return yes > 0.10 && yes < 0.90;
-    } catch { return false; }
-  }).length;
-  if (uncertainCount < 2) return false;
-
-  // Filter 4: Meaningful group volume
-  const totalVol = markets.reduce((s, m) => s + parseFloat((m.volume24hr as any) || 0), 0);
-  if (totalVol < 50000) return false;
-
-  // Filter 5: Skip single-game events (they're already obvious on Polymarket)
-  const title = (event.title ?? "").toLowerCase();
-  if (title.includes(" vs ") || title.includes(" vs. ") || title.includes(" @ ")) return false;
-
-  return true;
+function PriceChangeBadge({ change }: { change: number }) {
+  if (Math.abs(change) < 0.005) return null;
+  const pct = (change * 100).toFixed(1);
+  const up = change > 0;
+  return (
+    <span className={cn(
+      "text-[10px] font-mono font-semibold flex items-center gap-0.5",
+      up ? "text-green-400" : "text-red-400"
+    )}>
+      {up ? <TrendingUp size={9} /> : <TrendingDown size={9} />}
+      {up ? "+" : ""}{pct}%
+    </span>
+  );
 }
 
+function CorrelatedMarketRow({ item, isMispriced }: { item: CorrelatedMarket; isMispriced: boolean }) {
+  const prob = getYesPrice(item.market.outcomePrices);
+  const change = parseFloat((item.market.oneDayPriceChange as any) || 0);
 
-export function EventGroupsTab({ events }: EventGroupsTabProps) {
+  return (
+    <div className={cn(
+      "p-3 rounded-lg border transition-colors",
+      isMispriced
+        ? "bg-orange-500/5 border-orange-500/25 hover:bg-orange-500/10"
+        : "bg-secondary/20 border-transparent hover:bg-secondary/50"
+    )}>
+      <div className="flex items-start justify-between gap-2 mb-2">
+        <div className="flex-1 min-w-0">
+          <p className="text-xs font-medium text-foreground/90 leading-snug line-clamp-2">
+            {item.market.question}
+          </p>
+          <p className="text-[10px] text-muted-foreground mt-0.5 truncate">
+            {item.eventTitle}
+          </p>
+        </div>
+        <div className="flex flex-col items-end gap-1 shrink-0">
+          <span className="text-sm font-mono font-bold text-primary">{formatPercent(prob)}</span>
+          <PriceChangeBadge change={change} />
+        </div>
+      </div>
+
+      {isMispriced && (
+        <div className="flex items-center gap-1 text-[10px] text-orange-400 font-semibold mt-1">
+          <AlertTriangle size={9} />
+          Lagging — hasn't repriced
+        </div>
+      )}
+
+      <div className="mt-2 relative h-1.5 bg-background rounded-full overflow-hidden">
+        <motion.div
+          initial={{ width: 0 }}
+          animate={{ width: `${Math.min(100, prob * 100)}%` }}
+          transition={{ duration: 0.8, ease: "easeOut" }}
+          className="absolute top-0 left-0 h-full bg-primary rounded-full"
+        />
+      </div>
+    </div>
+  );
+}
+
+export function EventGroupsTab({ groups }: EventGroupsTabProps) {
   const [search, setSearch] = useState("");
 
-  const valuableEvents = useMemo(() => {
-    return events
-      .filter(isValuableGroup)
-      .sort((a, b) => {
-        const volA = (a.markets || []).reduce((s, m) => s + parseFloat((m.volume24hr as any) || 0), 0);
-        const volB = (b.markets || []).reduce((s, m) => s + parseFloat((m.volume24hr as any) || 0), 0);
-        return volB - volA;
-      });
-  }, [events]);
-
   const filtered = useMemo(() => {
-    if (!search.trim()) return valuableEvents;
+    if (!search.trim()) return groups;
     const q = search.toLowerCase();
-    return valuableEvents.filter(e =>
-      e.title?.toLowerCase().includes(q) ||
-      e.slug?.toLowerCase().includes(q) ||
-      e.markets?.some(m => m.question?.toLowerCase().includes(q))
+    return groups.filter(g =>
+      g.tag.toLowerCase().includes(q) ||
+      g.markets.some(m =>
+        m.market.question?.toLowerCase().includes(q) ||
+        m.eventTitle?.toLowerCase().includes(q)
+      )
     );
-  }, [valuableEvents, search]);
+  }, [groups, search]);
 
   return (
     <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+
       <div className="flex flex-col sm:flex-row gap-3 items-start sm:items-center justify-between">
         <div className="relative max-w-md w-full">
           <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-muted-foreground">
             <Search size={18} />
           </div>
           <Input
-            placeholder="Search events..."
+            placeholder="Search tags or questions..."
             className="pl-10"
             value={search}
             onChange={e => setSearch(e.target.value)}
           />
         </div>
         <p className="text-xs text-muted-foreground font-mono shrink-0">
-          {valuableEvents.length} multi-question event{valuableEvents.length !== 1 ? "s" : ""}
+          {groups.length} cross-event correlation{groups.length !== 1 ? "s" : ""}
         </p>
       </div>
 
       {filtered.length === 0 ? (
         <div className="text-center py-16 text-muted-foreground">
-          {search ? `No events found matching "${search}"` : "No qualifying events found."}
+          {search ? `No correlations found for "${search}"` : "No qualifying correlations found."}
         </div>
       ) : (
         <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6">
-          {filtered.map((event, ei) => {
-            const markets = (event.markets || []).filter(
-              m => m.active !== false && m.closed !== true
-            );
-            const totalVol = markets.reduce(
-              (s, m) => s + parseFloat((m.volume24hr as any) || 0), 0
-            );
+          {filtered.map((group, gi) => {
+            const uniqueEvents = new Set(group.markets.map(m => m.eventSlug));
 
-            // Detect which markets haven't repriced while at least one sibling moved
-            const hasAnyMove = markets.some(m => Math.abs(parseFloat((m.priceChange as any) || 0)) >= 0.03);
-            const staleMktIds = new Set(
-              hasAnyMove
-                ? markets
-                    .filter(m => Math.abs(parseFloat((m.priceChange as any) || 0)) < 0.005)
-                    .map(m => m.id)
-                : []
-            );
+            const mispricedMarkets = group.hasMispricing
+              ? new Set(
+                  group.markets
+                    .filter(a => {
+                      const aChange = Math.abs(parseFloat((a.market.oneDayPriceChange as any) || 0));
+                      return aChange < 0.01 && group.markets.some(b => {
+                        if (b.eventSlug === a.eventSlug) return false;
+                        return Math.abs(parseFloat((b.market.oneDayPriceChange as any) || 0)) >= 0.05;
+                      });
+                    })
+                    .map(m => m.market.id)
+                )
+              : new Set<string>();
 
             return (
               <motion.div
-                key={event.id}
+                key={group.tag}
                 initial={{ opacity: 0, y: 16 }}
                 animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: ei * 0.04 }}
+                transition={{ delay: gi * 0.04 }}
               >
-                <Card className="flex flex-col h-full bg-card hover:border-primary/30 transition-colors duration-300">
+                <Card className={cn(
+                  "flex flex-col h-full transition-colors duration-300",
+                  group.hasMispricing
+                    ? "border-orange-500/30 bg-card hover:border-orange-500/50"
+                    : "bg-card hover:border-primary/30"
+                )}>
                   <CardHeader className="pb-3 border-b border-border/50">
                     <CardTitle className="flex justify-between items-start gap-2">
-                      <span className="text-sm font-bold text-primary/90 leading-snug flex-1">
-                        {event.title || event.slug?.replace(/-/g, " ")}
+                      <span className="flex items-center gap-1.5 text-sm font-bold text-primary/90 leading-snug">
+                        <Link2 size={14} className="shrink-0" />
+                        {group.tag}
                       </span>
-                      <Badge variant="secondary" className="shrink-0">{markets.length}</Badge>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        {group.hasMispricing && (
+                          <Badge className="bg-orange-500/20 text-orange-400 border-orange-500/30 text-[10px] py-0 px-1.5">
+                            ⚠ Mispricing
+                          </Badge>
+                        )}
+                        <Badge variant="secondary">{uniqueEvents.size} events</Badge>
+                      </div>
                     </CardTitle>
 
-                    <div className="mt-2">
-                      <span className="text-xs text-muted-foreground font-mono">
-                        Vol 24h: {formatCurrency(totalVol)}
-                      </span>
+                    <div className="mt-1.5 flex items-center gap-3 text-xs text-muted-foreground font-mono">
+                      <span>{group.markets.length} markets</span>
+                      <span>·</span>
+                      <span>Vol 24h: {formatCurrency(group.totalVol)}</span>
                     </div>
                   </CardHeader>
 
-                  <CardContent className="pt-4 flex-1 flex flex-col space-y-3">
-                    {markets.map(market => {
-                      const prob = getYesPrice(market);
-                      const priceChange = parseFloat((market.priceChange as any) || 0);
-                      const isBigMove = Math.abs(priceChange) >= 0.05;
-                      const isStale = staleMktIds.has(market.id);
-
-                      return (
-                        <div
-                          key={market.id}
-                          className={cn(
-                            "p-3 rounded-lg bg-secondary/30 hover:bg-secondary/60 transition-colors border",
-                            isStale
-                              ? "border-orange-500/30 bg-orange-500/5"
-                              : "border-transparent hover:border-border/50"
-                          )}
-                        >
-                          <div className="flex justify-between items-start gap-2 mb-2">
-                            <h4 className="font-medium text-sm leading-snug line-clamp-2 text-foreground/90">
-                              {market.question}
-                            </h4>
-                          </div>
-
-                          <div className="flex justify-between items-center mb-3">
-                            <span className="text-xs text-muted-foreground font-mono">
-                              Vol: {formatCurrency(market.volume24hr)}
-                            </span>
-
-                            {isStale && hasAnyMove ? (
-                              <span className="text-[10px] text-orange-400 font-semibold flex items-center gap-1">
-                                <AlertCircle size={10} /> Hasn't repriced
-                              </span>
-                            ) : isBigMove ? (
-                              <Badge
-                                variant={priceChange > 0 ? "success" : "destructive"}
-                                className="text-[10px] py-0 px-1.5 h-4 flex items-center gap-0.5"
-                              >
-                                {priceChange > 0 ? <TrendingUp size={9} /> : <TrendingDown size={9} />}
-                                {priceChange > 0 ? "+" : ""}{(priceChange * 100).toFixed(1)}% 24h
-                              </Badge>
-                            ) : priceChange === 0 ? (
-                              <span className="text-[10px] text-muted-foreground flex items-center gap-1">
-                                <Clock size={10} /> Unchanged
-                              </span>
-                            ) : (
-                              <span className={cn("text-[10px] font-mono", priceChange > 0 ? "text-green-400" : "text-red-400")}>
-                                {priceChange > 0 ? "+" : ""}{(priceChange * 100).toFixed(1)}%
-                              </span>
-                            )}
-                          </div>
-
-                          <div className="relative h-2 bg-background rounded-full overflow-hidden border border-border/30">
-                            <motion.div
-                              initial={{ width: 0 }}
-                              animate={{ width: `${Math.min(100, prob * 100)}%` }}
-                              transition={{ duration: 1, ease: "easeOut" }}
-                              className="absolute top-0 left-0 h-full bg-primary"
-                            />
-                          </div>
-                          <div className="mt-1 flex justify-end">
-                            <span className="text-xs font-mono font-bold text-primary">
-                              {formatPercent(prob)} YES
-                            </span>
-                          </div>
-                        </div>
-                      );
-                    })}
+                  <CardContent className="pt-4 flex-1 flex flex-col gap-3">
+                    {group.markets.map(item => (
+                      <CorrelatedMarketRow
+                        key={item.market.id}
+                        item={item}
+                        isMispriced={mispricedMarkets.has(item.market.id)}
+                      />
+                    ))}
                   </CardContent>
                 </Card>
               </motion.div>

@@ -1,0 +1,74 @@
+**Spread Scanner is broken — here's the exact fix:**
+
+The CLOB API requires authentication for most markets. That's why you get 0 results — the requests are either failing silently or returning empty books. Fix it by using Gamma's own `bestBid`/`bestAsk` fields BUT only for markets where those fields are actually populated and meaningful.
+
+Tell your agent:
+
+---
+
+**Spread Scanner fix — stop hitting CLOB, use Gamma data correctly:**
+
+```javascript
+// Fetch 500 markets not 200 — more data = more spread variety
+GET https://gamma-api.polymarket.com/markets?active=true&closed=false&limit=500&order=volume24hr&ascending=false
+
+// Then filter like this:
+const spreadMarkets = markets
+  .filter(m => {
+    const bid = parseFloat(m.bestBid)
+    const ask = parseFloat(m.bestAsk)
+    const vol = parseFloat(m.volume24hr)
+    const spread = ask - bid
+    
+    return (
+      bid > 0 && ask > 0 &&        // has actual bid/ask data
+      bid > 0.05 && ask < 0.95 &&  // not a dead market
+      spread > 0.01 &&              // has some spread
+      vol > 1000 &&                 // some real volume
+      m.active === true &&
+      m.closed === false
+    )
+  })
+  .map(m => ({
+    question: m.question,
+    slug: m.slug,
+    bestBid: parseFloat(m.bestBid),
+    bestAsk: parseFloat(m.bestAsk),
+    spread: parseFloat(m.bestAsk) - parseFloat(m.bestBid),
+    volume24hr: parseFloat(m.volume24hr),
+    url: `https://polymarket.com/event/${m.slug}`
+  }))
+  .sort((a, b) => b.spread - a.spread)
+  .slice(0, 30) // top 30 widest spreads
+```
+
+Display spread in cents not decimals — multiply by 100. So 0.06 shows as "6¢".
+
+---
+
+**Volume Spikes — your data is mostly garbage, here's why:**
+
+Most of your spikes are sports games (NHL, NBA) that are 27 days old — those aren't spikes, they're just new game markets that opened recently with all their volume in day 1. And markets at 0.1% or 98%+ probability are already resolved/near-certain — useless.
+
+Add these filters:
+
+```javascript
+.filter(m => {
+  const prob = parseFloat(JSON.parse(m.outcomePrices)[0])
+  return (
+    prob > 0.05 && prob < 0.95 &&     // genuinely uncertain
+    parseFloat(m.volume24hr) > 100000 && // meaningful volume — raise to $100k
+    !m.question.toLowerCase().includes(' vs ') && // no sports games
+    !m.question.toLowerCase().includes(' vs. ') &&
+    !m.question.toLowerCase().includes('tweets') // no Elon tweet counting
+  )
+})
+```
+
+**The good spikes already in your data that should survive this filter:**
+- Fed interest rate April 2026 (multiple markets, real news-driven spike) ✅
+- Iranian regime fall ✅  
+- Trump visit China ✅
+- Manchester United match ✅
+
+Those are real signals. The NHL games and Elon tweet counters are noise — kill them.

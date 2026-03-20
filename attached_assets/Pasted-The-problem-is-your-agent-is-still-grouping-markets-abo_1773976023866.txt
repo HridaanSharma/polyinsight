@@ -1,0 +1,66 @@
+The problem is your agent is still grouping markets about the SAME topic together (all Bitcoin price markets, all Elon tweet markets). That's useless — Polymarket already shows those together.
+What you actually want is cross-event correlation — markets that are about DIFFERENT topics but where one outcome logically affects the other.
+Tell your agent exactly this:
+
+Completely rethink the Event Groups feature. Here's the new logic:
+Stop grouping markets by eventSlug. That just recreates what Polymarket already shows.
+Instead, find markets from completely different events that are logically correlated using their tags array from the Gamma API.
+Step 1 — fetch markets with tags:
+https://gamma-api.polymarket.com/markets?active=true&closed=false&limit=200&order=volume24hr&ascending=false
+Each market has a tags array like ["Trump", "US Politics", "Economy"]
+Step 2 — build correlation groups using shared tags:
+javascript// Find markets that share 1+ tags but are from DIFFERENT events
+const tagMap = {}
+
+markets.forEach(market => {
+  const tags = market.tags || []
+  tags.forEach(tag => {
+    if (!tagMap[tag]) tagMap[tag] = []
+    tagMap[tag].push(market)
+  })
+})
+
+// A good correlation group = same tag, different eventSlugs, 
+// both genuinely uncertain (10-90%), both >$50k volume
+const correlationGroups = Object.entries(tagMap)
+  .map(([tag, markets]) => {
+    const filtered = markets.filter(m => {
+      const yes = parseFloat(JSON.parse(m.outcomePrices)[0])
+      return yes > 0.10 && 
+             yes < 0.90 && 
+             parseFloat(m.volume24hr) > 50000
+    })
+    // Must be from different events
+    const uniqueEvents = new Set(filtered.map(m => m.eventSlug))
+    if (uniqueEvents.size < 2) return null
+    if (filtered.length < 2) return null
+    return { tag, markets: filtered }
+  })
+  .filter(Boolean)
+Step 3 — for each correlation group, show the insight:
+The insight IS the whole point. For each group display:
+
+Group header = the shared tag e.g. "🔗 Iran"
+List each market from different events with its probability
+Calculate logical consistency: if "US attacks Iran by March 31" = 22%, then "US x Iran ceasefire by March 31" = 7.5% makes sense. But if attack probability goes up and ceasefire stays flat — flag it: "⚠️ These markets haven't moved together — possible mispricing"
+The flag logic:
+
+javascript// If two markets share a tag and one moved >5% in 24h 
+// but the other moved <1% — flag as "Hasn't repriced"
+const moved = market.priceChange24h > 0.05
+const otherStale = correlatedMarket.priceChange24h < 0.01
+if (moved && otherStale) flag as "⚠️ Lagging — hasn't repriced"
+Step 4 — skip these tag groups entirely:
+javascriptconst uselessTags = [
+  'Bitcoin', 'Ethereum', 'Crypto', // pure price markets
+  'Elon Musk', // tweet counting markets  
+  'Eurovision', 'F1', 'NBA', 'NFL', 'Premier League' // pure winner markets
+]
+if (uselessTags.includes(tag)) skip
+Good groups this will surface:
+
+Tag "Iran" → "US attacks Iran" + "Oil price above $100" + "Iran ceasefire" all in the same group from different events — these are logically connected and traders can see if they've moved together
+Tag "Fed" → "Fed cuts rates March" + "Inflation above 3%" + "Recession 2026" — all connected, all from different events
+Tag "Trump" → "Trump signs tariff bill" + "China GDP growth" + "S&P500 above 5000" — if tariff bill moves, do the economic consequence markets move too?
+
+That's the actual intelligence layer — surfacing when logically connected markets across different events are pricing inconsistently with each other.

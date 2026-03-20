@@ -18,7 +18,29 @@ interface SpikeData {
 
 export function VolumeSpikesTab({ markets }: VolumeSpikesTabProps) {
   const spikedMarkets = useMemo(() => {
-    const activeMarkets = markets.filter(m => m.active !== false && m.closed !== true);
+    const activeMarkets = markets.filter(m => {
+      if (m.active === false || m.closed === true) return false;
+
+      // Require genuine uncertainty
+      let prob = 0.5;
+      try {
+        const parsed = JSON.parse(m.outcomePrices || "[]");
+        if (parsed.length > 0) prob = parseFloat(parsed[0]);
+      } catch {}
+      if (prob <= 0.05 || prob >= 0.95) return false;
+
+      // Meaningful 24h volume
+      if (parseFloat(m.volume24hr as any) < 100000) return false;
+
+      // Skip sports game noise
+      const q = (m.question || "").toLowerCase();
+      if (q.includes(" vs ") || q.includes(" vs. ")) return false;
+
+      // Skip Elon tweet counting markets
+      if (q.includes("tweets")) return false;
+
+      return true;
+    });
 
     const data: SpikeData[] = activeMarkets.map(market => {
       const daysSinceCreation = Math.max(
@@ -31,7 +53,7 @@ export function VolumeSpikesTab({ markets }: VolumeSpikesTabProps) {
     });
 
     return data
-      .filter(d => d.score > 5)
+      .filter(d => d.score > 3)
       .sort((a, b) => b.score - a.score);
   }, [markets]);
 

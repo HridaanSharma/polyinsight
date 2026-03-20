@@ -1,0 +1,215 @@
+Tell your agent exactly this — replace only the `findChains` function and the batching logic, keep everything else identical:
+
+---
+
+```javascript
+// Replace findChains function entirely with this:
+const findChains = async (markets) => {
+  const marketList = markets.map((m, i) => {
+    const yes = parseFloat(JSON.parse(m.outcomePrices)[0])
+    const vol = parseFloat(m.volume24hr)
+    return `${i}. "${m.question}" | YES:${(yes*100).toFixed(1)}% | 24hVol:$${(vol/1000).toFixed(0)}K`
+  }).join('\n')
+
+  const response = await fetch('/proxy/claude', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 4000,
+      messages: [{
+        role: 'user',
+        content: `You are a senior macro trader analyzing live prediction markets for causal mispricings.
+
+Here are active Polymarket markets right now:
+${marketList}
+
+Find groups where markets from COMPLETELY DIFFERENT topics are causally connected — meaning if one market moves, the other should logically reprice but may not have yet.
+
+STRICT RULES — read every single one:
+
+1. MUST cross completely different topics. Examples of valid crosses:
+   - Military conflict + commodity prices (invasion disrupts supply)
+   - Central bank policy + asset prices (rates affect valuations)  
+   - Election outcome + legislation (who wins determines what passes)
+   - Trade policy + economic indicators (tariffs affect GDP)
+   - Geopolitical event + diplomatic relations (war ends diplomacy)
+   - Leadership change + regional stability (new leader changes policy)
+
+2. The causal mechanism must be DIRECT — one step, not three steps. 
+   "A causes B" is valid. "A causes C which causes D which affects B" is NOT valid.
+
+3. NEVER group these together — they are always invalid:
+   - Sports games with ANYTHING (soccer, basketball, hockey are self-contained)
+   - UFO/alien markets with ANYTHING
+   - Tweet counting markets with ANYTHING
+   - Bitcoin price targets with Iran conflict (too indirect)
+   - Bitcoin price targets with Bitcoin price targets (same topic)
+   - Iran markets with Iran markets (same topic)
+   - Oil price targets with oil price targets (same topic)
+   - Fed rate markets with Fed rate markets (same topic)
+
+4. Bitcoin is ONLY valid on the EFFECT side when paired with:
+   - Fed rate decisions (direct: rates affect risk assets)
+   - US debt ceiling/default (direct: dollar crisis affects crypto)
+   - Never with geopolitical conflicts
+
+5. Oil is ONLY valid on the EFFECT side when paired with:
+   - Iran/Hormuz conflict markets (direct: disrupts supply)
+   - Ukraine/Russia ceasefire (direct: restores energy supply)
+   - Never pair oil with oil
+
+6. Each group needs minimum 2 markets on EACH side
+
+7. Every index must exist in the list above — double check before returning
+
+8. Find as many valid groups as the data supports — aim for 10-15 if the data allows
+
+Return ONLY valid JSON, no other text, no markdown:
+[
+  {
+    "theme": "Specific Cause → Specific Effect",
+    "emoji": "single relevant emoji",
+    "description": "One sentence explaining the direct real-world mechanism",
+    "sideA_label": "CAUSE LABEL IN CAPS",
+    "sideA_indices": [0, 3],
+    "sideB_label": "EFFECT LABEL IN CAPS",
+    "sideB_indices": [12, 15, 22]
+  }
+]`
+      }]
+    })
+  })
+
+  const data = await response.json()
+  try {
+    const text = data.content[0].text.trim()
+    const clean = text.replace(/```json|```/g, '').trim()
+    const chains = JSON.parse(clean)
+
+    return chains.map(chain => {
+      const sideAMarkets = chain.sideA_indices
+        .filter(i => i >= 0 && i < markets.length)
+        .map(i => markets[i])
+        .filter(Boolean)
+
+      const sideBMarkets = chain.sideB_indices
+        .filter(i => i >= 0 && i < markets.length)
+        .map(i => markets[i])
+        .filter(Boolean)
+
+      if (sideAMarkets.length < 2 || sideBMarkets.length < 2) return null
+
+      // Hard reject: same topic on both sides
+      const sideAText = sideAMarkets.map(m => m.question.toLowerCase()).join(' ')
+      const sideBText = sideBMarkets.map(m => m.question.toLowerCase()).join(' ')
+
+      const sameTopicPairs = [
+        ['iran', 'iran'],
+        ['bitcoin', 'bitcoin'],
+        ['oil', 'oil'],
+        ['crude', 'crude'],
+        ['fed ', 'fed '],
+        ['israel', 'israel'],
+        ['ukraine', 'ukraine'],
+        ['taiwan', 'taiwan'],
+        ['election', 'election'],
+        ['trump', 'trump']
+      ]
+
+      for (const [topicA, topicB] of sameTopicPairs) {
+        if (sideAText.includes(topicA) && sideBText.includes(topicB)) return null
+      }
+
+      // Hard reject: sports on either side
+      const sportsKeywords = [
+        ' vs ', ' vs. ', ' @ ', 'win on 202',
+        'nba', 'nfl', 'nhl', 'mlb', 'soccer',
+        'football match', 'basketball', 'hockey game'
+      ]
+      const allText = sideAText + ' ' + sideBText
+      if (sportsKeywords.some(kw => allText.includes(kw))) return null
+
+      // Hard reject: alien/UFO markets
+      if (allText.includes('alien') || allText.includes('ufo') || 
+          allText.includes('confirm that aliens')) return null
+
+      // Hard reject: tweet counting
+      if (allText.includes('tweets from') || allText.includes('post 2') || 
+          allText.includes('post 3') || allText.includes('post 4')) return null
+
+      const allMkts = [...sideAMarkets, ...sideBMarkets]
+      const totalVol = allMkts.reduce((s, m) =>
+        s + parseFloat(m.volume24hr || 0), 0)
+
+      const movedMarkets = allMkts.filter(m =>
+        Math.abs(parseFloat(m.priceChange24h || 0)) > 0.03
+      )
+
+      return {
+        theme: chain.theme,
+        emoji: chain.emoji,
+        description: chain.description,
+        sideA: { label: chain.sideA_label, markets: sideAMarkets },
+        sideB: { label: chain.sideB_label, markets: sideBMarkets },
+        totalVol,
+        movedCount: movedMarkets.length,
+        hasMovement: movedMarkets.length > 0
+      }
+    }).filter(Boolean)
+  } catch(e) {
+    console.error('Claude parse error:', e, data)
+    return []
+  }
+}
+
+// Replace batching logic with this — 500 markets, 5 batches of 50
+const res = await fetch('/proxy/gamma/markets?active=true&closed=false&limit=500&order=volume24hr&ascending=false')
+const all = await res.json()
+
+const meaningful = all.filter(m => {
+  try {
+    const yes = parseFloat(JSON.parse(m.outcomePrices)[0])
+    const vol24 = parseFloat(m.volume24hr || 0)
+    return yes > 0.05 && yes < 0.95 &&
+      vol24 > 5000 &&
+      m.active === true &&
+      m.closed === false
+  } catch { return false }
+})
+
+const top200 = meaningful
+  .sort((a,b) => parseFloat(b.volume24hr) - parseFloat(a.volume24hr))
+  .slice(0, 200)
+
+// 4 batches of 50 in parallel — covers all 200 top markets
+const batch1 = top200.slice(0, 50)
+const batch2 = top200.slice(50, 100)
+const batch3 = top200.slice(100, 150)
+const batch4 = top200.slice(150, 200)
+
+const [chains1, chains2, chains3, chains4] = await Promise.all([
+  findChains(batch1),
+  findChains(batch2),
+  findChains(batch3),
+  findChains(batch4)
+])
+
+const allChains = [...chains1, ...chains2, ...chains3, ...chains4]
+  .filter((c, i, arr) =>
+    // Deduplicate: skip if same theme already exists
+    arr.findIndex(x => x.theme === c.theme) === i
+  )
+  // Also deduplicate if sideA markets are identical to an existing chain
+  .filter((c, i, arr) => {
+    const sideAIds = c.sideA.markets.map(m => m.conditionId).sort().join(',')
+    return arr.findIndex(x => {
+      const xIds = x.sideA.markets.map(m => m.conditionId).sort().join(',')
+      return xIds === sideAIds
+    }) === i
+  })
+  .sort((a, b) => b.totalVol - a.totalVol)
+  .slice(0, 20) // show top 20 chains max
+```
+
+**Do not change anything else — volume spikes, spread scanner, proxy routes, rendering, trade buttons all stay exactly the same.**

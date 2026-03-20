@@ -5,12 +5,14 @@ const router: IRouter = Router();
 const GAMMA_BASE = "https://gamma-api.polymarket.com";
 const CLOB_BASE = "https://clob.polymarket.com";
 
-async function proxyGet(url: string, res: any) {
+async function proxyGet(url: string, res: any, noCache = false) {
   try {
     const response = await fetch(url, {
       headers: {
         "Accept": "application/json",
         "Content-Type": "application/json",
+        "Cache-Control": "no-cache",
+        "User-Agent": "Mozilla/5.0 (compatible; PolymarketDashboard/1.0)",
       },
     });
     if (!response.ok) {
@@ -18,6 +20,7 @@ async function proxyGet(url: string, res: any) {
       return;
     }
     const data = await response.json();
+    if (noCache) res.set("Cache-Control", "no-store");
     res.json(data);
   } catch (err: any) {
     res.status(502).json({ error: err?.message ?? "Proxy error" });
@@ -61,7 +64,12 @@ router.get("/polymarket/markets", async (req, res) => {
   const closed = req.query.closed ?? "false";
   const order = req.query.order ?? "volume24hr";
   const ascending = req.query.ascending ?? "false";
-  await proxyGet(`${GAMMA_BASE}/markets?limit=${limit}&offset=${offset}&active=${active}&closed=${closed}&order=${order}&ascending=${ascending}`, res);
+  // _t is a client-side cache buster — strip before forwarding
+  await proxyGet(
+    `${GAMMA_BASE}/markets?limit=${limit}&offset=${offset}&active=${active}&closed=${closed}&order=${order}&ascending=${ascending}`,
+    res,
+    true // no-store so browser never caches market data
+  );
 });
 
 router.get("/polymarket/book", async (req, res) => {

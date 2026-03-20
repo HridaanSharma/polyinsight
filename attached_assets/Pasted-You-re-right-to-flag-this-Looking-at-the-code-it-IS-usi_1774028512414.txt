@@ -1,0 +1,83 @@
+You're right to flag this. Looking at the code — it IS using prefed/cached data because `top200` is built from the Gamma API fetch at the top of the page load, which might be stale.
+
+Tell your agent exactly this:
+
+---
+
+Inside the `findChains` function and the batching logic, make sure data is always freshly fetched at the moment the user clicks Refresh, not cached from page load. Change it like this:
+
+```javascript
+// In your Refresh button click handler — fetch fresh every time
+document.getElementById('refresh-btn').addEventListener('click', async () => {
+  
+  // ALWAYS fetch fresh data at click time — never use cached variables
+  const freshRes = await fetch('/proxy/gamma/markets?active=true&closed=false&limit=500&order=volume24hr&ascending=false&_t=' + Date.now())
+  // The _t=Date.now() forces a cache bust — no stale data ever
+  
+  const freshAll = await freshRes.json()
+
+  const meaningful = freshAll.filter(m => {
+    try {
+      const yes = parseFloat(JSON.parse(m.outcomePrices)[0])
+      const vol24 = parseFloat(m.volume24hr || 0)
+      return yes > 0.05 && yes < 0.95 &&
+        vol24 > 5000 &&
+        m.active === true &&
+        m.closed === false
+    } catch { return false }
+  })
+
+  const top200 = meaningful
+    .sort((a,b) => parseFloat(b.volume24hr) - parseFloat(a.volume24hr))
+    .slice(0, 200)
+
+  // Log to confirm data is live
+  console.log('Fresh fetch at:', new Date().toISOString())
+  console.log('Top market right now:', top200[0]?.question, 
+    '| vol24h:', top200[0]?.volume24hr)
+  console.log('Total meaningful markets found:', meaningful.length)
+
+  // Now run the 4 batches with this fresh data
+  const batch1 = top200.slice(0, 50)
+  const batch2 = top200.slice(50, 100)
+  const batch3 = top200.slice(100, 150)
+  const batch4 = top200.slice(150, 200)
+
+  const [chains1, chains2, chains3, chains4] = await Promise.all([
+    findChains(batch1),
+    findChains(batch2),
+    findChains(batch3),
+    findChains(batch4)
+  ])
+
+  // rest of combining logic...
+})
+```
+
+Also add this cache-busting header in your proxy server for the Gamma route:
+
+```javascript
+app.get('/proxy/gamma/markets', async (req, res) => {
+  const params = new URLSearchParams(req.query)
+  params.delete('_t') // remove cache buster before sending to Gamma
+  
+  const response = await fetch(
+    `https://gamma-api.polymarket.com/markets?${params}`,
+    {
+      headers: {
+        'Accept': 'application/json',
+        'User-Agent': 'Mozilla/5.0',
+        'Cache-Control': 'no-cache' // force Gamma to return fresh data
+      }
+    }
+  )
+  
+  const data = await response.json()
+  
+  // Tell browser never to cache this response
+  res.set('Cache-Control', 'no-store')
+  res.json(data)
+})
+```
+
+This guarantees every time Refresh is clicked, it hits Gamma fresh, gets live market data, and sends that live data to Claude. Claude never sees old or cached markets.

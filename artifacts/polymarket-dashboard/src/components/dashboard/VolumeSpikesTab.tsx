@@ -1,5 +1,5 @@
 import React, { useMemo } from "react"
-import { AlertTriangle, TrendingUp } from "lucide-react"
+import { AlertTriangle, TrendingUp, ExternalLink } from "lucide-react"
 import { motion } from "framer-motion"
 import { GammaMarket } from "@/hooks/use-polymarket"
 import { Card, CardContent } from "@/components/ui/card"
@@ -14,6 +14,7 @@ interface SpikeData {
   market: GammaMarket;
   score: number;
   daysAlive: number;
+  tradeUrl: string;
 }
 
 const SKIP_KEYWORDS = [
@@ -24,64 +25,68 @@ const SKIP_KEYWORDS = [
   "tweet",
   "o/u ",
   "over/under",
+  "win on 2026",
+  "win on 2025",
+  "drivers champion",
+  "eurovision",
+  "ncaa tournament",
   "-0.5",
   "-1.5",
   "-2.5",
-  "win the nba",
-  "win the nfl",
-  "win the nhl",
-  "win the mlb",
-  "ncaa tournament",
-  "drivers champion",
-  "eurovision",
   "super bowl",
   "stanley cup",
   "world series",
   "nba finals",
-  "nfl season",
-  "champions league final",
-  "fa cup final",
   "march madness",
-  "gold glove",
-  "mvp award",
-  "cy young",
 ];
 
+function getTradeUrl(m: GammaMarket): string {
+  if (m.url) return m.url;
+  if (m.slug) return `https://polymarket.com/event/${m.slug}`;
+  return "https://polymarket.com";
+}
+
 export function VolumeSpikesTab({ markets }: VolumeSpikesTabProps) {
-  const spikedMarkets = useMemo(() => {
-    const activeMarkets = markets.filter(m => {
-      if (m.active === false || m.closed === true) return false;
+  const spikedMarkets = useMemo((): SpikeData[] => {
+    const results: SpikeData[] = [];
+
+    for (const m of markets) {
+      if (m.active === false || m.closed === true) continue;
 
       const q = (m.question || "").toLowerCase();
-      if (SKIP_KEYWORDS.some(kw => q.includes(kw))) return false;
+      if (SKIP_KEYWORDS.some(kw => q.includes(kw))) continue;
 
-      // Require genuine uncertainty (8–92%)
+      // Genuine uncertainty: 8–88%
       let prob = 0.5;
       try {
         const parsed = JSON.parse(m.outcomePrices || "[]");
         if (parsed.length > 0) prob = parseFloat(parsed[0]);
       } catch {}
-      if (prob < 0.08 || prob > 0.92) return false;
+      if (prob < 0.08 || prob > 0.88) continue;
 
-      // Raised volume floor to $200K
-      if (parseFloat(m.volume24hr as any) < 200000) return false;
+      const vol24 = parseFloat(m.volume24hr as any) || 0;
+      const volTotal = parseFloat((m.volumeClob || m.volume || 0) as any) || 0;
 
-      return true;
-    });
+      // Minimum $200K today
+      if (vol24 < 200000) continue;
 
-    const data: SpikeData[] = activeMarkets.map(market => {
-      const daysSinceCreation = Math.max(
-        1,
-        (Date.now() - new Date(market.createdAt).getTime()) / 86400000
-      );
-      const avgDailyVolume = (market.volumeClob || 0) / daysSinceCreation;
-      const score = avgDailyVolume > 0 ? (market.volume24hr || 0) / avgDailyVolume : 0;
-      return { market, score, daysAlive: daysSinceCreation };
-    });
+      // Need a baseline: market must be at least 7 days old
+      const ts = m.startDate || m.createdAt;
+      const daysOld = ts
+        ? (Date.now() - new Date(ts).getTime()) / 86400000
+        : 0;
+      if (daysOld < 7) continue;
 
-    return data
-      .filter(d => d.score > 3)
-      .sort((a, b) => b.score - a.score);
+      const avgDaily = volTotal / Math.max(daysOld, 1);
+      if (avgDaily <= 0) continue;
+
+      const score = vol24 / avgDaily;
+      if (score < 4) continue;
+
+      results.push({ market: m, score, daysAlive: daysOld, tradeUrl: getTradeUrl(m) });
+    }
+
+    return results.sort((a, b) => b.score - a.score).slice(0, 15);
   }, [markets]);
 
   return (
@@ -94,7 +99,7 @@ export function VolumeSpikesTab({ markets }: VolumeSpikesTabProps) {
         <div>
           <h3 className="font-bold text-lg leading-none mb-1">Unusual Activity Detected</h3>
           <p className="text-sm text-red-400/80">
-            Markets where 24h volume is 3× or more the historical daily average. Min $200K/day.
+            Markets where 24h vol is 4× their historical daily average. Min $200K today, established markets only.
           </p>
         </div>
       </div>
@@ -103,10 +108,13 @@ export function VolumeSpikesTab({ markets }: VolumeSpikesTabProps) {
         <div className="text-center py-12 text-muted-foreground flex flex-col items-center">
           <TrendingUp size={48} className="mb-4 opacity-20" />
           <p>No unusual volume spikes detected right now.</p>
+          <p className="text-xs mt-2 text-muted-foreground/60">
+            Requires 4× spike, $200K/24h, market age &gt;7 days, and 8–88% probability.
+          </p>
         </div>
       ) : (
         <div className="grid gap-4">
-          {spikedMarkets.map(({ market, score, daysAlive }, i) => {
+          {spikedMarkets.map(({ market, score, daysAlive, tradeUrl }, i) => {
             let prob = market.lastTradePrice || 0;
             try {
               const parsed = JSON.parse(market.outcomePrices || "[]");
@@ -124,18 +132,18 @@ export function VolumeSpikesTab({ markets }: VolumeSpikesTabProps) {
                   <CardContent className="p-5 flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
 
                     <div className="flex-1">
-                      <div className="flex items-center gap-2 mb-2">
+                      <div className="flex items-center gap-2 mb-2 flex-wrap">
                         <Badge variant="destructive" className="animate-pulse">
                           🚨 {score.toFixed(1)}× spike
                         </Badge>
                         <span className="text-xs text-muted-foreground bg-secondary px-2 py-1 rounded">
-                          {daysAlive.toFixed(0)}d old
+                          {Math.floor(daysAlive)}d old
                         </span>
                       </div>
                       <h4 className="text-base font-medium">{market.question}</h4>
                     </div>
 
-                    <div className="flex gap-6 w-full md:w-auto bg-background/50 p-4 rounded-xl border border-border/30">
+                    <div className="flex gap-4 w-full md:w-auto bg-background/50 p-4 rounded-xl border border-border/30 flex-wrap">
                       <div className="flex flex-col">
                         <span className="text-xs text-muted-foreground mb-1 uppercase tracking-wider">24h Vol</span>
                         <span className="font-mono font-bold">{formatCurrency(market.volume24hr)}</span>
@@ -143,7 +151,7 @@ export function VolumeSpikesTab({ markets }: VolumeSpikesTabProps) {
                       <div className="w-px bg-border/50" />
                       <div className="flex flex-col">
                         <span className="text-xs text-muted-foreground mb-1 uppercase tracking-wider">Total Vol</span>
-                        <span className="font-mono font-bold">{formatCurrency(market.volumeClob)}</span>
+                        <span className="font-mono font-bold">{formatCurrency(market.volumeClob || market.volume)}</span>
                       </div>
                       <div className="w-px bg-border/50" />
                       <div className="flex flex-col min-w-[80px]">
@@ -155,6 +163,16 @@ export function VolumeSpikesTab({ markets }: VolumeSpikesTabProps) {
                           </div>
                         </div>
                       </div>
+                      <div className="w-px bg-border/50" />
+                      <a
+                        href={tradeUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="self-center flex items-center gap-1.5 text-xs text-blue-400 hover:text-blue-300 font-semibold transition-colors"
+                      >
+                        <ExternalLink className="w-3.5 h-3.5" />
+                        Trade
+                      </a>
                     </div>
 
                   </CardContent>

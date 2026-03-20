@@ -1,0 +1,175 @@
+Tell your agent exactly this:
+
+---
+
+**Event Groups — fetch real live data, build causal chains from it:**
+
+```javascript
+// Step 1: Fetch real markets from Gamma API
+const res = await fetch('/proxy/gamma/markets?active=true&closed=false&limit=500&order=volume24hr&ascending=false')
+const allMarkets = await res.json()
+
+// Step 2: Filter to meaningful markets only
+const meaningful = allMarkets.filter(m => {
+  try {
+    const yes = parseFloat(JSON.parse(m.outcomePrices)[0])
+    return yes > 0.05 && yes < 0.95 &&
+      parseFloat(m.volume24hr) > 10000 &&
+      m.active === true &&
+      m.closed === false
+  } catch { return false }
+})
+
+// Step 3: Define causal chain themes with keywords
+const CAUSAL_CHAINS = [
+  {
+    theme: "Iran Military Escalation",
+    description: "If US invades Iran → oil spikes → regime collapses",
+    keywords: ["iran", "invade iran", "iranian regime", "crude oil", "hormuz", "kharg"]
+  },
+  {
+    theme: "Fed & US Economy",
+    description: "Inflation drives Fed decisions which drive market prices",
+    keywords: ["fed ", "federal reserve", "interest rate", "inflation", "recession", "s&p 500", "unemployment"]
+  },
+  {
+    theme: "Trump Foreign Policy",
+    description: "Trump actions abroad affect trade, alliances and economies",
+    keywords: ["trump", "tariff", "china", "taiwan", "trade war", "sanctions"]
+  },
+  {
+    theme: "2026 US Midterms",
+    description: "Who controls Congress determines what policy passes",
+    keywords: ["midterm", "senate", "house of representatives", "democrat", "republican", "governor", "congress"]
+  },
+  {
+    theme: "AI & Tech Race",
+    description: "AI milestones and company moves are interconnected",
+    keywords: ["openai", "anthropic", "google deepmind", "agi", "gpt", "ai model", "nvidia"]
+  },
+  {
+    theme: "Russia-Ukraine War",
+    description: "Ceasefire and territorial outcomes are deeply linked",
+    keywords: ["ukraine", "russia", "putin", "zelensky", "ceasefire", "nato", "crimea"]
+  },
+  {
+    theme: "Crypto Market",
+    description: "Bitcoin ETF, regulation and price targets move together",
+    keywords: ["bitcoin etf", "sec crypto", "crypto regulation", "bitcoin above", "ethereum above"]
+  }
+]
+
+// Step 4: Match real markets to each chain
+const chains = CAUSAL_CHAINS.map(chain => {
+  const matched = meaningful.filter(m => {
+    const q = m.question.toLowerCase()
+    const eventTitle = (m.groupItemTitle || m.question || '').toLowerCase()
+    return chain.keywords.some(kw => q.includes(kw) || eventTitle.includes(kw))
+  })
+
+  // Deduplicate by conditionId
+  const unique = matched.filter((m, i, arr) => 
+    arr.findIndex(x => x.conditionId === m.conditionId) === i
+  )
+
+  // Need at least 3 real markets to show the chain
+  if (unique.length < 3) return null
+
+  return {
+    ...chain,
+    markets: unique.slice(0, 8), // max 8 per chain
+    totalVolume: unique.reduce((sum, m) => sum + parseFloat(m.volume24hr || 0), 0)
+  }
+}).filter(Boolean)
+```
+
+**Step 5 — Display each chain card with REAL data:**
+
+```javascript
+chains.forEach(chain => {
+  const card = `
+    <div class="chain-card">
+      <div class="chain-header">
+        <span class="chain-icon">🔗</span>
+        <strong>${chain.theme}</strong>
+        <span class="chain-vol">$${formatVol(chain.totalVolume)} group vol</span>
+      </div>
+      <p class="chain-desc">${chain.description}</p>
+      <div class="chain-markets">
+        ${chain.markets.map(m => {
+          const yes = parseFloat(JSON.parse(m.outcomePrices)[0])
+          const change = parseFloat(m.priceChange24h || 0)
+          const changeStr = change > 0 ? `+${(change*100).toFixed(1)}%` : `${(change*100).toFixed(1)}%`
+          const changeClass = change > 0.03 ? 'moved-up' : change < -0.03 ? 'moved-down' : 'unchanged'
+          const url = m.url || `https://polymarket.com/event/${m.slug}`
+          return `
+            <div class="chain-market-row">
+              <span class="chain-q">${m.question}</span>
+              <span class="chain-prob">${(yes*100).toFixed(1)}%</span>
+              <span class="chain-change ${changeClass}">${changeStr}</span>
+              <a href="${url}" target="_blank" class="trade-btn">Trade</a>
+            </div>
+          `
+        }).join('')}
+      </div>
+    </div>
+  `
+})
+```
+
+Show a `🔴 Moved` badge on any market in the chain where `priceChange24h > 0.03` or `< -0.03` — this tells the trader "this market just moved, check if the others in this chain have repriced."
+
+---
+
+**Volume Spikes — real data, filtered properly:**
+
+```javascript
+const spikes = allMarkets
+  .filter(m => {
+    const q = m.question.toLowerCase()
+    const prob = parseFloat(JSON.parse(m.outcomePrices)[0])
+    const vol24 = parseFloat(m.volume24hr || 0)
+    const volTotal = parseFloat(m.volumeClob || m.volume || 1)
+    const daysOld = (Date.now() - new Date(m.startDate || m.createdAt)) / 86400000
+    
+    // Skip noise
+    const isNoise = [
+      ' vs ', ' vs. ', ' @ ', 'tweets', 'o/u ',
+      'win on 2026', 'win on 2025', 'drivers champion',
+      'eurovision', 'ncaa tournament'
+    ].some(kw => q.includes(kw))
+    if (isNoise) return false
+
+    // Must be genuinely uncertain
+    if (prob < 0.08 || prob > 0.88) return false
+
+    // Must have real volume today
+    if (vol24 < 200000) return false
+
+    // Spike score = today vs historical daily average
+    const avgDaily = volTotal / Math.max(daysOld, 1)
+    const spike = vol24 / avgDaily
+    m._spike = spike
+    m._avgDaily = avgDaily
+
+    return spike >= 4 && daysOld > 7 // must be old enough to have a baseline
+  })
+  .sort((a, b) => b._spike - a._spike)
+  .slice(0, 15)
+```
+
+---
+
+**Trade button URLs — use real Polymarket URL:**
+
+```javascript
+// Gamma API returns a 'url' field on most markets — use it directly
+const getTradeUrl = (market) => {
+  if (market.url) return market.url  // use Gamma's own URL field first
+  if (market.slug) return `https://polymarket.com/event/${market.slug}`
+  return `https://polymarket.com`
+}
+
+// All trade buttons:
+window.open(getTradeUrl(market), '_blank')
+```

@@ -31,14 +31,10 @@ export default function Dashboard() {
     else if (activeTab === "spreads") refetchSpreads();
   };
 
-  const isCurrentTabLoading =
-    activeTab === "spikes" ? marketsLoading : false;
-
+  const isCurrentTabLoading = activeTab === "spikes" ? marketsLoading : false;
   const isCurrentTabRefetching =
     activeTab === "spikes" ? marketsRefetching :
     activeTab === "spreads" ? spreadsRefetching : false;
-
-  const totalMarkets = markets.length;
 
   const tabs = [
     { id: "events" as TabId, label: "Event Groups", icon: Activity },
@@ -60,7 +56,7 @@ export default function Dashboard() {
                   Polymarket Intel
                 </h1>
                 <p className="text-xs text-muted-foreground font-mono mt-0.5">
-                  Live Terminal • {totalMarkets} active markets
+                  Live Terminal • {markets.length} markets loaded
                 </p>
               </div>
             </div>
@@ -111,9 +107,7 @@ export default function Dashboard() {
         {isCurrentTabLoading ? (
           <div className="flex flex-col items-center justify-center py-32 space-y-4">
             <div className="w-12 h-12 border-4 border-primary/20 border-t-primary rounded-full animate-spin" />
-            <p className="text-muted-foreground font-mono animate-pulse">
-              Fetching markets…
-            </p>
+            <p className="text-muted-foreground font-mono animate-pulse">Fetching markets…</p>
           </div>
         ) : (
           <AnimatePresence mode="wait">

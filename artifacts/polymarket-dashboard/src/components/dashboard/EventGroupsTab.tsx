@@ -1,122 +1,129 @@
-import { useCorrelationPairs, type CorrelationPair } from "@/hooks/use-polymarket";
+import { useCausalChains, type CausalChain, type ChainMarket } from "@/hooks/use-polymarket";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { AlertTriangle, ExternalLink, RefreshCw, Loader2, Link2, TrendingUp, TrendingDown } from "lucide-react";
+import { AlertTriangle, ExternalLink, RefreshCw, Loader2, TrendingUp, TrendingDown, Activity } from "lucide-react";
 
-function pctStr(p: number) {
+function formatVol(v: number): string {
+  if (v >= 1_000_000) return `$${(v / 1_000_000).toFixed(1)}M`;
+  if (v >= 1_000) return `$${(v / 1_000).toFixed(0)}K`;
+  return `$${v.toFixed(0)}`;
+}
+
+function pctStr(p: number): string {
   return `${(p * 100).toFixed(1)}%`;
 }
 
-function directionLabel(dir: string, side: 1 | 2): string {
-  if (dir === "market1_underpriced" && side === 1) return "Underpriced?";
-  if (dir === "market1_overpriced" && side === 1) return "Overpriced?";
-  if (dir === "market2_underpriced" && side === 2) return "Underpriced?";
-  if (dir === "market2_overpriced" && side === 2) return "Overpriced?";
-  return "";
-}
-
-function PairCard({ pair }: { pair: CorrelationPair }) {
-  const m1Label = directionLabel(pair.direction, 1);
-  const m2Label = directionLabel(pair.direction, 2);
-  const flagged1 = pair.direction.includes("market1");
-  const flagged2 = pair.direction.includes("market2");
+function MarketRow({ m }: { m: ChainMarket }) {
+  const changeStr =
+    m.moveDirection === "up"
+      ? `+${(Math.abs(m.oneDayPriceChange ?? m.priceChange ?? 0) * 100).toFixed(1)}%`
+      : m.moveDirection === "down"
+      ? `-${(Math.abs(m.oneDayPriceChange ?? m.priceChange ?? 0) * 100).toFixed(1)}%`
+      : "—";
 
   return (
-    <div className="rounded-xl border border-white/10 bg-white/5 p-4 flex flex-col gap-3 hover:bg-white/[0.08] transition-colors">
+    <div className="flex items-center gap-2 py-2 border-b border-white/5 last:border-0 group">
+      <div className="flex-1 min-w-0">
+        <p className="text-sm text-white/85 leading-snug truncate group-hover:text-white transition-colors">
+          {m.question}
+        </p>
+      </div>
+
+      {/* Probability */}
+      <div className="shrink-0 text-right w-14">
+        <span className="text-sm font-bold text-white tabular-nums">{pctStr(m.probability)}</span>
+      </div>
+
+      {/* Price change */}
+      <div className="shrink-0 w-16 text-right">
+        {m.moved ? (
+          <span
+            className={`inline-flex items-center gap-0.5 text-xs font-semibold px-1.5 py-0.5 rounded-full ${
+              m.moveDirection === "up"
+                ? "bg-green-500/20 text-green-400"
+                : "bg-red-500/20 text-red-400"
+            }`}
+          >
+            {m.moveDirection === "up" ? (
+              <TrendingUp className="w-2.5 h-2.5" />
+            ) : (
+              <TrendingDown className="w-2.5 h-2.5" />
+            )}
+            {changeStr}
+          </span>
+        ) : (
+          <span className="text-xs text-white/25">{changeStr}</span>
+        )}
+      </div>
+
+      {/* Trade button */}
+      <a
+        href={m.tradeUrl}
+        target="_blank"
+        rel="noreferrer"
+        className="shrink-0 flex items-center gap-1 text-xs text-white/40 hover:text-blue-400 transition-colors"
+      >
+        <ExternalLink className="w-3 h-3" />
+      </a>
+    </div>
+  );
+}
+
+function ChainCard({ chain }: { chain: CausalChain }) {
+  const movedCount = chain.markets.filter(m => m.moved).length;
+
+  return (
+    <div className="rounded-xl border border-white/10 bg-white/5 p-4 flex flex-col gap-3 hover:bg-white/[0.07] transition-colors">
+      {/* Header */}
       <div className="flex items-start justify-between gap-2">
-        <div className="flex items-center gap-2 text-blue-400">
-          <Link2 className="w-4 h-4 shrink-0" />
-          <span className="text-xs font-semibold uppercase tracking-wide">Possible Mispricing</span>
-        </div>
-        <AlertTriangle className="w-4 h-4 text-yellow-400 shrink-0" />
-      </div>
-
-      <div className="flex flex-col gap-2">
-        {/* Market 1 */}
-        <div className={`rounded-lg p-3 flex items-start justify-between gap-3 ${flagged1 ? "bg-yellow-400/10 border border-yellow-400/20" : "bg-white/5"}`}>
-          <div className="flex-1 min-w-0">
-            <p className="text-sm text-white/90 leading-snug">{pair.market1.question}</p>
-            {m1Label && (
-              <span className="mt-1 inline-flex items-center gap-1 text-xs text-yellow-400 font-semibold">
-                <TrendingUp className="w-3 h-3" /> {m1Label}
-              </span>
-            )}
-          </div>
-          <div className="shrink-0 text-right">
-            <div className="text-xl font-bold text-white tabular-nums">{pctStr(pair.market1.probability)}</div>
-            <div className="text-xs text-white/40">YES</div>
+        <div className="flex items-center gap-2">
+          <span className="text-xl leading-none">{chain.emoji}</span>
+          <div>
+            <h3 className="text-sm font-bold text-white leading-snug">{chain.theme}</h3>
+            <p className="text-xs text-white/45 mt-0.5">{chain.description}</p>
           </div>
         </div>
-
-        {/* Market 2 */}
-        <div className={`rounded-lg p-3 flex items-start justify-between gap-3 ${flagged2 ? "bg-yellow-400/10 border border-yellow-400/20" : "bg-white/5"}`}>
-          <div className="flex-1 min-w-0">
-            <p className="text-sm text-white/90 leading-snug">{pair.market2.question}</p>
-            {m2Label && (
-              <span className="mt-1 inline-flex items-center gap-1 text-xs text-yellow-400 font-semibold">
-                <TrendingDown className="w-3 h-3" /> {m2Label}
-              </span>
-            )}
-          </div>
-          <div className="shrink-0 text-right">
-            <div className="text-xl font-bold text-white tabular-nums">{pctStr(pair.market2.probability)}</div>
-            <div className="text-xs text-white/40">YES</div>
-          </div>
+        <div className="text-right shrink-0">
+          <div className="text-xs font-semibold text-white/60 tabular-nums">{formatVol(chain.totalVolume)}</div>
+          <div className="text-[10px] text-white/30">group vol</div>
         </div>
       </div>
 
-      {/* Relationship */}
-      <div className="rounded-lg bg-blue-500/10 border border-blue-500/20 px-3 py-2">
-        <p className="text-xs text-blue-300 leading-relaxed">
-          <span className="font-semibold text-blue-200">Link: </span>
-          {pair.relationship}
-        </p>
-      </div>
+      {/* Moved badge */}
+      {movedCount > 0 && (
+        <div className="flex items-center gap-2">
+          <span className="inline-flex items-center gap-1 text-xs font-semibold text-orange-300 bg-orange-500/15 border border-orange-500/25 px-2 py-0.5 rounded-full">
+            <Activity className="w-3 h-3" />
+            {movedCount} market{movedCount > 1 ? "s" : ""} moved &gt;3% — check for repricing
+          </span>
+        </div>
+      )}
 
-      {/* Inconsistency */}
-      <div className="rounded-lg bg-yellow-500/10 border border-yellow-500/20 px-3 py-2">
-        <p className="text-xs text-yellow-200 leading-relaxed">
-          <span className="font-semibold">⚠ </span>
-          {pair.inconsistency}
-        </p>
-      </div>
-
-      {/* Trade buttons */}
-      <div className="flex gap-2 mt-1">
-        <Button
-          size="sm"
-          variant="outline"
-          className="flex-1 h-7 text-xs border-white/15 bg-white/5 hover:bg-white/10 text-white/70"
-          onClick={() => window.open(`https://polymarket.com/event/${pair.market1.eventSlug}`, "_blank")}
-        >
-          <ExternalLink className="w-3 h-3 mr-1" />
-          Trade 1
-        </Button>
-        <Button
-          size="sm"
-          variant="outline"
-          className="flex-1 h-7 text-xs border-white/15 bg-white/5 hover:bg-white/10 text-white/70"
-          onClick={() => window.open(`https://polymarket.com/event/${pair.market2.eventSlug}`, "_blank")}
-        >
-          <ExternalLink className="w-3 h-3 mr-1" />
-          Trade 2
-        </Button>
+      {/* Market rows */}
+      <div className="flex flex-col">
+        {/* Column headers */}
+        <div className="flex items-center gap-2 pb-1 border-b border-white/8">
+          <div className="flex-1 text-[10px] text-white/30 uppercase tracking-wider">Market</div>
+          <div className="w-14 text-right text-[10px] text-white/30 uppercase tracking-wider">YES</div>
+          <div className="w-16 text-right text-[10px] text-white/30 uppercase tracking-wider">24h</div>
+          <div className="w-3" />
+        </div>
+        {chain.markets.map((m, i) => (
+          <MarketRow key={m.conditionId || m.id || i} m={m} />
+        ))}
       </div>
     </div>
   );
 }
 
 export function EventGroupsTab() {
-  const { data: pairs, isLoading, error, refetch, isFetching } = useCorrelationPairs();
+  const { chains, isLoading, error, refetch, isFetching } = useCausalChains();
 
   if (isLoading) {
     return (
       <div className="flex flex-col items-center justify-center gap-4 py-24 text-white/50">
         <Loader2 className="w-8 h-8 animate-spin text-blue-400" />
-        <div className="text-center">
-          <p className="text-sm font-medium text-white/70">Analyzing 150 markets with Claude AI…</p>
-          <p className="text-xs text-white/40 mt-1">Finding cross-event logical inconsistencies. This takes ~15 seconds.</p>
-        </div>
+        <p className="text-sm text-white/60">Loading 500 markets and building causal chains…</p>
       </div>
     );
   }
@@ -126,7 +133,7 @@ export function EventGroupsTab() {
       <div className="flex flex-col items-center justify-center gap-4 py-24 text-white/50">
         <AlertTriangle className="w-8 h-8 text-red-400" />
         <div className="text-center">
-          <p className="text-sm font-medium text-red-300">Analysis failed</p>
+          <p className="text-sm font-medium text-red-300">Failed to load</p>
           <p className="text-xs text-white/40 mt-1">{String(error)}</p>
         </div>
         <Button variant="outline" size="sm" onClick={() => refetch()} className="border-white/20 text-white/70">
@@ -137,18 +144,21 @@ export function EventGroupsTab() {
     );
   }
 
-  const validPairs = pairs ?? [];
+  const totalMoved = chains.reduce((s, c) => s + c.markets.filter(m => m.moved).length, 0);
 
   return (
     <div className="flex flex-col gap-4">
+      {/* Header bar */}
       <div className="flex items-center justify-between px-1">
         <div className="flex items-center gap-3">
           <span className="text-sm text-white/60">
-            {validPairs.length} cross-event inconsistenc{validPairs.length === 1 ? "y" : "ies"} found
+            {chains.length} active causal chain{chains.length !== 1 ? "s" : ""}
           </span>
-          <Badge variant="secondary" className="bg-blue-500/20 text-blue-300 border-blue-500/30 text-xs">
-            Claude AI
-          </Badge>
+          {totalMoved > 0 && (
+            <Badge className="bg-orange-500/20 text-orange-300 border-orange-500/30 text-xs border">
+              {totalMoved} moved
+            </Badge>
+          )}
         </div>
         <Button
           variant="ghost"
@@ -162,15 +172,14 @@ export function EventGroupsTab() {
         </Button>
       </div>
 
-      {validPairs.length === 0 ? (
+      {chains.length === 0 ? (
         <div className="text-center py-16 text-white/40">
-          <p className="text-sm">No significant inconsistencies detected right now.</p>
-          <p className="text-xs mt-1">Markets may be efficiently priced, or try refreshing.</p>
+          <p className="text-sm">No chains matched — try refreshing.</p>
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-          {validPairs.map((pair, i) => (
-            <PairCard key={`${pair.market1.slug}-${pair.market2.slug}-${i}`} pair={pair} />
+        <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
+          {chains.map(chain => (
+            <ChainCard key={chain.theme} chain={chain} />
           ))}
         </div>
       )}

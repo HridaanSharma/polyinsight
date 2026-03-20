@@ -101,6 +101,71 @@ function GroupColumn({
   );
 }
 
+interface ChainInsight {
+  keyA: ChainMarket;
+  keyB: ChainMarket;
+  yesA: number;
+  yesB: number;
+  jointPct: string;
+  diverged: boolean;
+  divergedMsg: string;
+  baseMsg: string;
+}
+
+function generateInsight(chain: CrossChain): ChainInsight {
+  const closestTo50 = (mkts: ChainMarket[]) =>
+    mkts.reduce((best, m) =>
+      Math.abs(m.probability - 0.5) < Math.abs(best.probability - 0.5) ? m : best
+    );
+
+  const keyA = closestTo50(chain.groupA);
+  const keyB = closestTo50(chain.groupB);
+  const yesA = keyA.probability;
+  const yesB = keyB.probability;
+  const joint = yesA * yesB;
+
+  const changeA = parseFloat((keyA.oneDayPriceChange ?? keyA.priceChange ?? 0) as any) || 0;
+  const changeB = parseFloat((keyB.oneDayPriceChange ?? keyB.priceChange ?? 0) as any) || 0;
+  const diverged = Math.abs(changeA) > 0.03 && Math.abs(changeB) < 0.01;
+
+  const shortQ = (q: string, n = 45) => q.length > n ? q.slice(0, n) + "…" : q;
+
+  const divergedMsg = diverged
+    ? `${shortQ(keyA.question)} moved ${changeA > 0 ? "+" : ""}${(changeA * 100).toFixed(1)}% today but ${shortQ(keyB.question)} hasn't repriced yet`
+    : "";
+
+  const baseMsg = `${(yesA * 100).toFixed(1)}% × ${(yesB * 100).toFixed(1)}% = ${(joint * 100).toFixed(1)}% joint probability. If you think these are linked, check whether either side is mispriced relative to the other.`;
+
+  return { keyA, keyB, yesA, yesB, jointPct: (joint * 100).toFixed(1), diverged, divergedMsg, baseMsg };
+}
+
+function TraderInsight({ chain }: { chain: CrossChain }) {
+  const ins = generateInsight(chain);
+
+  return (
+    <div className="rounded-lg border border-yellow-500/20 bg-yellow-500/5 px-3 py-2.5 flex flex-col gap-1.5">
+      <div className="flex items-center gap-1.5">
+        <span className="text-[10px] font-bold tracking-widest uppercase text-yellow-400/80">💡 Trader Insight</span>
+      </div>
+
+      {ins.diverged ? (
+        <p className="text-xs text-yellow-200/80 leading-relaxed">
+          <span className="font-semibold text-orange-300">⚠️ Divergence detected —</span>{" "}
+          {ins.divergedMsg}
+        </p>
+      ) : (
+        <p className="text-xs text-white/55 leading-relaxed">
+          <span className="font-semibold text-white/75 tabular-nums">
+            {(ins.yesA * 100).toFixed(1)}% × {(ins.yesB * 100).toFixed(1)}% ={" "}
+            <span className="text-yellow-300">{ins.jointPct}% joint probability</span>
+          </span>
+          {" — "}if you believe these markets are linked, check whether either side is mispriced relative to the other.
+        </p>
+      )}
+    </div>
+  );
+}
+
 function CrossChainCard({ chain }: { chain: CrossChain }) {
   const allMarkets = [...chain.groupA, ...chain.groupB];
   const movedCount = allMarkets.filter(m => m.moved).length;
@@ -140,6 +205,9 @@ function CrossChainCard({ chain }: { chain: CrossChain }) {
         </div>
         <GroupColumn label={chain.groupBLabel} markets={chain.groupB} accent="amber" />
       </div>
+
+      {/* Trader insight panel */}
+      <TraderInsight chain={chain} />
     </div>
   );
 }

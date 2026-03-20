@@ -1,7 +1,7 @@
 import React, { useState } from "react"
 import { motion, AnimatePresence } from "framer-motion"
 import { RefreshCcw, Activity, Zap, ShieldAlert } from "lucide-react"
-import { useCorrelationGroups, useActiveMarkets, useLiveSpreadScanner } from "@/hooks/use-polymarket"
+import { useActiveMarkets, useLiveSpreadScanner } from "@/hooks/use-polymarket"
 import { EventGroupsTab } from "@/components/dashboard/EventGroupsTab"
 import { VolumeSpikesTab } from "@/components/dashboard/VolumeSpikesTab"
 import { SpreadScannerTab } from "@/components/dashboard/SpreadScannerTab"
@@ -11,13 +11,6 @@ type TabId = "events" | "spikes" | "spreads";
 
 export default function Dashboard() {
   const [activeTab, setActiveTab] = useState<TabId>("events");
-
-  const {
-    data: groups = [],
-    isLoading: groupsLoading,
-    refetch: refetchGroups,
-    isRefetching: groupsRefetching,
-  } = useCorrelationGroups();
 
   const {
     data: markets = [],
@@ -34,20 +27,16 @@ export default function Dashboard() {
   } = useLiveSpreadScanner();
 
   const handleRefresh = () => {
-    if (activeTab === "events") refetchGroups();
-    else if (activeTab === "spikes") refetchMarkets();
-    else refetchSpreads();
+    if (activeTab === "spikes") refetchMarkets();
+    else if (activeTab === "spreads") refetchSpreads();
   };
 
   const isCurrentTabLoading =
-    activeTab === "events" ? groupsLoading :
-    activeTab === "spikes" ? marketsLoading :
-    false;
+    activeTab === "spikes" ? marketsLoading : false;
 
   const isCurrentTabRefetching =
-    activeTab === "events" ? groupsRefetching :
     activeTab === "spikes" ? marketsRefetching :
-    spreadsRefetching;
+    activeTab === "spreads" ? spreadsRefetching : false;
 
   const totalMarkets = markets.length;
 
@@ -102,16 +91,18 @@ export default function Dashboard() {
               ))}
             </div>
 
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handleRefresh}
-              disabled={isCurrentTabLoading || isCurrentTabRefetching}
-              className="hidden md:flex bg-secondary/30"
-            >
-              <RefreshCcw className={`mr-2 h-4 w-4 ${isCurrentTabRefetching ? "animate-spin" : ""}`} />
-              Refresh
-            </Button>
+            {activeTab !== "events" && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleRefresh}
+                disabled={isCurrentTabLoading || isCurrentTabRefetching}
+                className="hidden md:flex bg-secondary/30"
+              >
+                <RefreshCcw className={`mr-2 h-4 w-4 ${isCurrentTabRefetching ? "animate-spin" : ""}`} />
+                Refresh
+              </Button>
+            )}
           </div>
         </div>
       </header>
@@ -121,7 +112,7 @@ export default function Dashboard() {
           <div className="flex flex-col items-center justify-center py-32 space-y-4">
             <div className="w-12 h-12 border-4 border-primary/20 border-t-primary rounded-full animate-spin" />
             <p className="text-muted-foreground font-mono animate-pulse">
-              {activeTab === "events" ? "Building cross-event correlations..." : "Fetching markets..."}
+              Fetching markets…
             </p>
           </div>
         ) : (
@@ -133,7 +124,7 @@ export default function Dashboard() {
               exit={{ opacity: 0, y: -10 }}
               transition={{ duration: 0.2 }}
             >
-              {activeTab === "events" && <EventGroupsTab groups={groups} />}
+              {activeTab === "events" && <EventGroupsTab />}
               {activeTab === "spikes" && <VolumeSpikesTab markets={markets} />}
               {activeTab === "spreads" && (
                 <SpreadScannerTab

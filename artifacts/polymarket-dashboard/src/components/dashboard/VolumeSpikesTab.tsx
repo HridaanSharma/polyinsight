@@ -16,28 +16,55 @@ interface SpikeData {
   daysAlive: number;
 }
 
+const SKIP_KEYWORDS = [
+  " vs ",
+  " vs. ",
+  " @ ",
+  "tweets",
+  "tweet",
+  "o/u ",
+  "over/under",
+  "-0.5",
+  "-1.5",
+  "-2.5",
+  "win the nba",
+  "win the nfl",
+  "win the nhl",
+  "win the mlb",
+  "ncaa tournament",
+  "drivers champion",
+  "eurovision",
+  "super bowl",
+  "stanley cup",
+  "world series",
+  "nba finals",
+  "nfl season",
+  "champions league final",
+  "fa cup final",
+  "march madness",
+  "gold glove",
+  "mvp award",
+  "cy young",
+];
+
 export function VolumeSpikesTab({ markets }: VolumeSpikesTabProps) {
   const spikedMarkets = useMemo(() => {
     const activeMarkets = markets.filter(m => {
       if (m.active === false || m.closed === true) return false;
 
-      // Require genuine uncertainty
+      const q = (m.question || "").toLowerCase();
+      if (SKIP_KEYWORDS.some(kw => q.includes(kw))) return false;
+
+      // Require genuine uncertainty (8–92%)
       let prob = 0.5;
       try {
         const parsed = JSON.parse(m.outcomePrices || "[]");
         if (parsed.length > 0) prob = parseFloat(parsed[0]);
       } catch {}
-      if (prob <= 0.05 || prob >= 0.95) return false;
+      if (prob < 0.08 || prob > 0.92) return false;
 
-      // Meaningful 24h volume
-      if (parseFloat(m.volume24hr as any) < 100000) return false;
-
-      // Skip sports game noise
-      const q = (m.question || "").toLowerCase();
-      if (q.includes(" vs ") || q.includes(" vs. ")) return false;
-
-      // Skip Elon tweet counting markets
-      if (q.includes("tweets")) return false;
+      // Raised volume floor to $200K
+      if (parseFloat(m.volume24hr as any) < 200000) return false;
 
       return true;
     });
@@ -67,7 +94,7 @@ export function VolumeSpikesTab({ markets }: VolumeSpikesTabProps) {
         <div>
           <h3 className="font-bold text-lg leading-none mb-1">Unusual Activity Detected</h3>
           <p className="text-sm text-red-400/80">
-            Markets where 24h volume is 5× or more than the historical daily average.
+            Markets where 24h volume is 3× or more the historical daily average. Min $200K/day.
           </p>
         </div>
       </div>

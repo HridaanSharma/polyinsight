@@ -1,0 +1,220 @@
+Tell your agent all of this:
+
+---
+
+**Problem 1 — Event Groups doing it wrong:**
+
+Stop grouping by tags entirely. That just recreates Polymarket's own category pages.
+
+The REAL feature is: find two markets from **completely different events** where one outcome logically implies something about the other. This requires semantic analysis, not tag matching.
+
+Here's the exact algorithm:
+
+```javascript
+// Step 1: Fetch 300 markets
+const markets = await fetch(
+  'https://gamma-api.polymarket.com/markets?active=true&closed=false&limit=300&order=volume24hr&ascending=false'
+)
+
+// Step 2: Filter to only genuinely uncertain, meaningful markets
+const filtered = markets.filter(m => {
+  const yes = parseFloat(JSON.parse(m.outcomePrices)[0])
+  return yes > 0.08 && yes < 0.92 &&
+    parseFloat(m.volume24hr) > 50000 &&
+    m.eventSlug !== undefined
+})
+
+// Step 3: Build correlation pairs using Claude API
+// Send batches of market questions to Claude and ask it to find
+// logical dependencies between them
+
+const findCorrelations = async (markets) => {
+  const questions = markets.map((m, i) => 
+    `${i}: "${m.question}" (${(parseFloat(JSON.parse(m.outcomePrices)[0])*100).toFixed(1)}%)`
+  ).join('\n')
+
+  const response = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 1000,
+      messages: [{
+        role: 'user',
+        content: `You are analyzing prediction market prices for logical inconsistencies.
+
+Here are active markets with their current probabilities:
+${questions}
+
+Find pairs of markets where:
+1. They are from DIFFERENT topics/events
+2. One outcome logically affects the probability of the other
+3. Their current prices might be INCONSISTENT with each other
+
+Example of what we want:
+- "Will Fed cut rates in March?" at 5% AND "Will inflation stay above 3%?" at 80% — these are connected, if inflation is high Fed won't cut
+- "Will Democrats win Senate?" at 60% AND "Will climate bill pass?" at 15% — if Dems win Senate at 60%, climate bill at 15% seems too low
+- "Will US invade Iran?" at 45% AND "Will oil hit $120?" at 11% — invasion would spike oil, these seem inconsistent
+
+Return ONLY a JSON array, no other text:
+[
+  {
+    "market1_index": 3,
+    "market2_index": 7,
+    "relationship": "If X happens, Y should be higher/lower",
+    "inconsistency": "Market A is at 60% but Market B is only 15% — seems too low given A",
+    "direction": "market2_underpriced" or "market2_overpriced"
+  }
+]
+
+Only return pairs where the inconsistency is REAL and SIGNIFICANT. Maximum 8 pairs.`
+      }]
+    })
+  })
+  
+  const data = await response.json()
+  const text = data.content[0].text
+  return JSON.parse(text)
+}
+```
+
+**Step 4 — Display each correlation pair as a card:**
+```
+┌─────────────────────────────────────────┐
+│ 🔗 POSSIBLE MISPRICING DETECTED         │
+│                                         │
+│ Will US invade Iran?          45% ↑1.5% │
+│ Will Oil hit $120 by March?   11% →0%   │
+│                                         │
+│ ⚠️ If invasion probability is 45%,     │
+│ oil spike markets seem underpriced      │
+│                                         │
+│ [Trade Iran] [Trade Oil]                │
+└─────────────────────────────────────────┘
+```
+
+Process markets in batches of 30 to keep the Claude API prompt manageable. Run 5 batches = 150 markets analyzed.
+
+---
+
+**Problem 2 — Volume Spikes showing sports games and nonsense:**
+
+```javascript
+const SKIP_KEYWORDS = [
+  ' vs ', ' vs. ', ' @ ',     // sports games
+  'tweets',                    // elon tweet counting
+  'o/u ', 'over/under',       // sports totals
+  '-0.5', '-1.5', '-2.5',    // sports spreads
+  'win the nba', 'win the nfl', 
+  'win the nhl', 'win the mlb',
+  'ncaa tournament',           // tournament brackets
+  'drivers champion',          // f1 winner markets
+  'eurovision'                 // winner markets
+]
+
+const isUselessSpike = (market) => {
+  const q = market.question.toLowerCase()
+  return SKIP_KEYWORDS.some(kw => q.includes(kw))
+}
+
+// Also filter: probability must be between 8% and 92%
+// Markets at 0.1% or 98% are basically resolved — not interesting spikes
+const prob = parseFloat(JSON.parse(m.outcomePrices)[0])
+if (prob < 0.08 || prob > 0.92) return false
+
+// Minimum volume threshold — raise it
+if (parseFloat(m.volume24hr) < 200000) return false
+```
+
+Good spikes that SHOULD show after filtering:
+- Fed rate decision markets ✅
+- Iranian regime / US invade Iran ✅  
+- Trump policy markets ✅
+- Trump visit China ✅
+
+---
+
+**Problem 3 — Spread Scanner showing everything as 2-3%:**
+
+The Gamma `bestBid`/`bestAsk` fields are rounded to nearest cent and cached — they'll never show real spread variation. You MUST hit the live CLOB.
+
+The reason CLOB was returning empty before is missing auth header. Fix the proxy:
+
+```javascript
+// In your Express proxy server.js
+app.get('/clob/book', async (req, res) => {
+  try {
+    const tokenId = req.query.token_id
+    if (!tokenId) return res.status(400).json({ error: 'missing token_id' })
+    
+    const response = await fetch(
+      `https://clob.polymarket.com/book?token_id=${tokenId}`,
+      {
+        headers: {
+          'Accept': 'application/json',
+          'Content-Type': 'application/json',
+          'User-Agent': 'Mozilla/5.0'  // ← this is what was missing
+        }
+      }
+    )
+    
+    if (!response.ok) {
+      return res.status(response.status).json({ error: 'CLOB error' })
+    }
+    
+    const data = await response.json()
+    res.json(data)
+  } catch(e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+```
+
+Then in the frontend, parse `clobTokenIds` correctly and check the response:
+
+```javascript
+const fetchRealSpread = async (market) => {
+  try {
+    // clobTokenIds is a JSON STRING like '["abc123","def456"]'
+    const tokenIds = JSON.parse(market.clobTokenIds)
+    const tokenId = tokenIds[0]  // YES token
+    
+    const res = await fetch(`/clob/book?token_id=${tokenId}`)
+    const book = await res.json()
+    
+    // Validate response has actual data
+    if (!book.bids?.length || !book.asks?.length) return null
+    
+    const bestBid = parseFloat(book.bids[0].price)
+    const bestAsk = parseFloat(book.asks[0].price)
+    const spread = bestAsk - bestBid
+    
+    // Only return if meaningful
+    if (bestBid < 0.05 || bestAsk > 0.95) return null
+    if (spread < 0.02) return null
+    if (spread > 0.40) return null  // also skip broken markets
+    
+    return {
+      question: market.question,
+      slug: market.slug,
+      bestBid,
+      bestAsk, 
+      spread,
+      spreadCents: Math.round(spread * 100),
+      volume24hr: parseFloat(market.volume24hr),
+      url: `https://polymarket.com/event/${market.slug}`
+    }
+  } catch { return null }
+}
+
+// Fetch markets ranked 30-230 by volume — skip top 30 (too liquid, tiny spreads)
+// Then run all fetches in parallel
+const results = await Promise.all(markets.slice(30, 230).map(fetchRealSpread))
+const valid = results
+  .filter(Boolean)
+  .filter(r => r.volume24hr > 2000)
+  .sort((a, b) => b.spread - a.spread)
+  .slice(0, 30)
+```
+
+The spread scanner should now show real variation — some markets at 8-15 cent spreads, not everything at 2%.

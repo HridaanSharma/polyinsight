@@ -1,191 +1,177 @@
-import React, { useMemo, useState } from "react"
-import { Search, AlertTriangle, TrendingUp, TrendingDown, Link2 } from "lucide-react"
-import { motion } from "framer-motion"
-import { CorrelationGroup, CorrelatedMarket } from "@/hooks/use-polymarket"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Badge } from "@/components/ui/badge"
-import { Input } from "@/components/ui/input"
-import { formatCurrency, formatPercent, cn } from "@/lib/utils"
+import { useCorrelationPairs, type CorrelationPair } from "@/hooks/use-polymarket";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { AlertTriangle, ExternalLink, RefreshCw, Loader2, Link2, TrendingUp, TrendingDown } from "lucide-react";
 
-interface EventGroupsTabProps {
-  groups: CorrelationGroup[];
+function pctStr(p: number) {
+  return `${(p * 100).toFixed(1)}%`;
 }
 
-function getYesPrice(outcomePrices: string): number {
-  try {
-    const parsed = JSON.parse(outcomePrices || "[]");
-    if (parsed.length > 0) return parseFloat(parsed[0]);
-  } catch { /* ignore */ }
-  return 0.5;
+function directionLabel(dir: string, side: 1 | 2): string {
+  if (dir === "market1_underpriced" && side === 1) return "Underpriced?";
+  if (dir === "market1_overpriced" && side === 1) return "Overpriced?";
+  if (dir === "market2_underpriced" && side === 2) return "Underpriced?";
+  if (dir === "market2_overpriced" && side === 2) return "Overpriced?";
+  return "";
 }
 
-function PriceChangeBadge({ change }: { change: number }) {
-  if (Math.abs(change) < 0.005) return null;
-  const pct = (change * 100).toFixed(1);
-  const up = change > 0;
-  return (
-    <span className={cn(
-      "text-[10px] font-mono font-semibold flex items-center gap-0.5",
-      up ? "text-green-400" : "text-red-400"
-    )}>
-      {up ? <TrendingUp size={9} /> : <TrendingDown size={9} />}
-      {up ? "+" : ""}{pct}%
-    </span>
-  );
-}
-
-function CorrelatedMarketRow({ item, isMispriced }: { item: CorrelatedMarket; isMispriced: boolean }) {
-  const prob = getYesPrice(item.market.outcomePrices);
-  const change = parseFloat((item.market.oneDayPriceChange as any) || 0);
+function PairCard({ pair }: { pair: CorrelationPair }) {
+  const m1Label = directionLabel(pair.direction, 1);
+  const m2Label = directionLabel(pair.direction, 2);
+  const flagged1 = pair.direction.includes("market1");
+  const flagged2 = pair.direction.includes("market2");
 
   return (
-    <div className={cn(
-      "p-3 rounded-lg border transition-colors",
-      isMispriced
-        ? "bg-orange-500/5 border-orange-500/25 hover:bg-orange-500/10"
-        : "bg-secondary/20 border-transparent hover:bg-secondary/50"
-    )}>
-      <div className="flex items-start justify-between gap-2 mb-2">
-        <div className="flex-1 min-w-0">
-          <p className="text-xs font-medium text-foreground/90 leading-snug line-clamp-2">
-            {item.market.question}
-          </p>
-          <p className="text-[10px] text-muted-foreground mt-0.5 truncate">
-            {item.eventTitle}
-          </p>
+    <div className="rounded-xl border border-white/10 bg-white/5 p-4 flex flex-col gap-3 hover:bg-white/[0.08] transition-colors">
+      <div className="flex items-start justify-between gap-2">
+        <div className="flex items-center gap-2 text-blue-400">
+          <Link2 className="w-4 h-4 shrink-0" />
+          <span className="text-xs font-semibold uppercase tracking-wide">Possible Mispricing</span>
         </div>
-        <div className="flex flex-col items-end gap-1 shrink-0">
-          <span className="text-sm font-mono font-bold text-primary">{formatPercent(prob)}</span>
-          <PriceChangeBadge change={change} />
+        <AlertTriangle className="w-4 h-4 text-yellow-400 shrink-0" />
+      </div>
+
+      <div className="flex flex-col gap-2">
+        {/* Market 1 */}
+        <div className={`rounded-lg p-3 flex items-start justify-between gap-3 ${flagged1 ? "bg-yellow-400/10 border border-yellow-400/20" : "bg-white/5"}`}>
+          <div className="flex-1 min-w-0">
+            <p className="text-sm text-white/90 leading-snug">{pair.market1.question}</p>
+            {m1Label && (
+              <span className="mt-1 inline-flex items-center gap-1 text-xs text-yellow-400 font-semibold">
+                <TrendingUp className="w-3 h-3" /> {m1Label}
+              </span>
+            )}
+          </div>
+          <div className="shrink-0 text-right">
+            <div className="text-xl font-bold text-white tabular-nums">{pctStr(pair.market1.probability)}</div>
+            <div className="text-xs text-white/40">YES</div>
+          </div>
+        </div>
+
+        {/* Market 2 */}
+        <div className={`rounded-lg p-3 flex items-start justify-between gap-3 ${flagged2 ? "bg-yellow-400/10 border border-yellow-400/20" : "bg-white/5"}`}>
+          <div className="flex-1 min-w-0">
+            <p className="text-sm text-white/90 leading-snug">{pair.market2.question}</p>
+            {m2Label && (
+              <span className="mt-1 inline-flex items-center gap-1 text-xs text-yellow-400 font-semibold">
+                <TrendingDown className="w-3 h-3" /> {m2Label}
+              </span>
+            )}
+          </div>
+          <div className="shrink-0 text-right">
+            <div className="text-xl font-bold text-white tabular-nums">{pctStr(pair.market2.probability)}</div>
+            <div className="text-xs text-white/40">YES</div>
+          </div>
         </div>
       </div>
 
-      {isMispriced && (
-        <div className="flex items-center gap-1 text-[10px] text-orange-400 font-semibold mt-1">
-          <AlertTriangle size={9} />
-          Lagging — hasn't repriced
-        </div>
-      )}
+      {/* Relationship */}
+      <div className="rounded-lg bg-blue-500/10 border border-blue-500/20 px-3 py-2">
+        <p className="text-xs text-blue-300 leading-relaxed">
+          <span className="font-semibold text-blue-200">Link: </span>
+          {pair.relationship}
+        </p>
+      </div>
 
-      <div className="mt-2 relative h-1.5 bg-background rounded-full overflow-hidden">
-        <motion.div
-          initial={{ width: 0 }}
-          animate={{ width: `${Math.min(100, prob * 100)}%` }}
-          transition={{ duration: 0.8, ease: "easeOut" }}
-          className="absolute top-0 left-0 h-full bg-primary rounded-full"
-        />
+      {/* Inconsistency */}
+      <div className="rounded-lg bg-yellow-500/10 border border-yellow-500/20 px-3 py-2">
+        <p className="text-xs text-yellow-200 leading-relaxed">
+          <span className="font-semibold">⚠ </span>
+          {pair.inconsistency}
+        </p>
+      </div>
+
+      {/* Trade buttons */}
+      <div className="flex gap-2 mt-1">
+        <Button
+          size="sm"
+          variant="outline"
+          className="flex-1 h-7 text-xs border-white/15 bg-white/5 hover:bg-white/10 text-white/70"
+          onClick={() => window.open(`https://polymarket.com/event/${pair.market1.eventSlug}`, "_blank")}
+        >
+          <ExternalLink className="w-3 h-3 mr-1" />
+          Trade 1
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          className="flex-1 h-7 text-xs border-white/15 bg-white/5 hover:bg-white/10 text-white/70"
+          onClick={() => window.open(`https://polymarket.com/event/${pair.market2.eventSlug}`, "_blank")}
+        >
+          <ExternalLink className="w-3 h-3 mr-1" />
+          Trade 2
+        </Button>
       </div>
     </div>
   );
 }
 
-export function EventGroupsTab({ groups }: EventGroupsTabProps) {
-  const [search, setSearch] = useState("");
+export function EventGroupsTab() {
+  const { data: pairs, isLoading, error, refetch, isFetching } = useCorrelationPairs();
 
-  const filtered = useMemo(() => {
-    if (!search.trim()) return groups;
-    const q = search.toLowerCase();
-    return groups.filter(g =>
-      g.tag.toLowerCase().includes(q) ||
-      g.markets.some(m =>
-        m.market.question?.toLowerCase().includes(q) ||
-        m.eventTitle?.toLowerCase().includes(q)
-      )
+  if (isLoading) {
+    return (
+      <div className="flex flex-col items-center justify-center gap-4 py-24 text-white/50">
+        <Loader2 className="w-8 h-8 animate-spin text-blue-400" />
+        <div className="text-center">
+          <p className="text-sm font-medium text-white/70">Analyzing 150 markets with Claude AI…</p>
+          <p className="text-xs text-white/40 mt-1">Finding cross-event logical inconsistencies. This takes ~15 seconds.</p>
+        </div>
+      </div>
     );
-  }, [groups, search]);
+  }
+
+  if (error) {
+    return (
+      <div className="flex flex-col items-center justify-center gap-4 py-24 text-white/50">
+        <AlertTriangle className="w-8 h-8 text-red-400" />
+        <div className="text-center">
+          <p className="text-sm font-medium text-red-300">Analysis failed</p>
+          <p className="text-xs text-white/40 mt-1">{String(error)}</p>
+        </div>
+        <Button variant="outline" size="sm" onClick={() => refetch()} className="border-white/20 text-white/70">
+          <RefreshCw className="w-3 h-3 mr-2" />
+          Retry
+        </Button>
+      </div>
+    );
+  }
+
+  const validPairs = pairs ?? [];
 
   return (
-    <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-
-      <div className="flex flex-col sm:flex-row gap-3 items-start sm:items-center justify-between">
-        <div className="relative max-w-md w-full">
-          <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-muted-foreground">
-            <Search size={18} />
-          </div>
-          <Input
-            placeholder="Search tags or questions..."
-            className="pl-10"
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-          />
+    <div className="flex flex-col gap-4">
+      <div className="flex items-center justify-between px-1">
+        <div className="flex items-center gap-3">
+          <span className="text-sm text-white/60">
+            {validPairs.length} cross-event inconsistenc{validPairs.length === 1 ? "y" : "ies"} found
+          </span>
+          <Badge variant="secondary" className="bg-blue-500/20 text-blue-300 border-blue-500/30 text-xs">
+            Claude AI
+          </Badge>
         </div>
-        <p className="text-xs text-muted-foreground font-mono shrink-0">
-          {groups.length} cross-event correlation{groups.length !== 1 ? "s" : ""}
-        </p>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => refetch()}
+          disabled={isFetching}
+          className="text-white/50 hover:text-white/80 h-7 text-xs"
+        >
+          {isFetching ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : <RefreshCw className="w-3 h-3 mr-1" />}
+          Refresh
+        </Button>
       </div>
 
-      {filtered.length === 0 ? (
-        <div className="text-center py-16 text-muted-foreground">
-          {search ? `No correlations found for "${search}"` : "No qualifying correlations found."}
+      {validPairs.length === 0 ? (
+        <div className="text-center py-16 text-white/40">
+          <p className="text-sm">No significant inconsistencies detected right now.</p>
+          <p className="text-xs mt-1">Markets may be efficiently priced, or try refreshing.</p>
         </div>
       ) : (
-        <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6">
-          {filtered.map((group, gi) => {
-            const uniqueEvents = new Set(group.markets.map(m => m.eventSlug));
-
-            const mispricedMarkets = group.hasMispricing
-              ? new Set(
-                  group.markets
-                    .filter(a => {
-                      const aChange = Math.abs(parseFloat((a.market.oneDayPriceChange as any) || 0));
-                      return aChange < 0.01 && group.markets.some(b => {
-                        if (b.eventSlug === a.eventSlug) return false;
-                        return Math.abs(parseFloat((b.market.oneDayPriceChange as any) || 0)) >= 0.05;
-                      });
-                    })
-                    .map(m => m.market.id)
-                )
-              : new Set<string>();
-
-            return (
-              <motion.div
-                key={group.tag}
-                initial={{ opacity: 0, y: 16 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: gi * 0.04 }}
-              >
-                <Card className={cn(
-                  "flex flex-col h-full transition-colors duration-300",
-                  group.hasMispricing
-                    ? "border-orange-500/30 bg-card hover:border-orange-500/50"
-                    : "bg-card hover:border-primary/30"
-                )}>
-                  <CardHeader className="pb-3 border-b border-border/50">
-                    <CardTitle className="flex justify-between items-start gap-2">
-                      <span className="flex items-center gap-1.5 text-sm font-bold text-primary/90 leading-snug">
-                        <Link2 size={14} className="shrink-0" />
-                        {group.tag}
-                      </span>
-                      <div className="flex items-center gap-1.5 shrink-0">
-                        {group.hasMispricing && (
-                          <Badge className="bg-orange-500/20 text-orange-400 border-orange-500/30 text-[10px] py-0 px-1.5">
-                            ⚠ Mispricing
-                          </Badge>
-                        )}
-                        <Badge variant="secondary">{uniqueEvents.size} events</Badge>
-                      </div>
-                    </CardTitle>
-
-                    <div className="mt-1.5 flex items-center gap-3 text-xs text-muted-foreground font-mono">
-                      <span>{group.markets.length} markets</span>
-                      <span>·</span>
-                      <span>Vol 24h: {formatCurrency(group.totalVol)}</span>
-                    </div>
-                  </CardHeader>
-
-                  <CardContent className="pt-4 flex-1 flex flex-col gap-3">
-                    {group.markets.map(item => (
-                      <CorrelatedMarketRow
-                        key={item.market.id}
-                        item={item}
-                        isMispriced={mispricedMarkets.has(item.market.id)}
-                      />
-                    ))}
-                  </CardContent>
-                </Card>
-              </motion.div>
-            );
-          })}
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+          {validPairs.map((pair, i) => (
+            <PairCard key={`${pair.market1.slug}-${pair.market2.slug}-${i}`} pair={pair} />
+          ))}
         </div>
       )}
     </div>

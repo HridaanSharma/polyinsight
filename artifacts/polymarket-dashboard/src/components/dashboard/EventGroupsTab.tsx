@@ -180,7 +180,7 @@ export function EventGroupsTab() {
         <Sparkles className="w-8 h-8 text-purple-400 animate-pulse" />
         <p className="text-sm font-medium text-white/70">AI analyzing live markets…</p>
         <p className="text-xs text-white/35 max-w-xs text-center">
-          Claude is reading today's top 80 markets and finding causal connections across categories
+          Claude is reading today's top 200 markets and finding causal connections across categories
         </p>
       </div>
     );

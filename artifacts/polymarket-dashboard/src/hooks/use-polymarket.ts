@@ -281,7 +281,7 @@ async function fetchAiChains(allMarkets: GammaMarket[]): Promise<CrossChain[]> {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      model: "claude-3-5-haiku-20241022",
+      model: "claude-haiku-4-5",
       max_tokens: 1200,
       messages: [{
         role: "user",

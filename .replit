@@ -28,4 +28,4 @@ timeoutMs = 20000
 [userenv]
 
 [userenv.shared]
-ANTHROPIC_API_KEY = "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"
+ANTHROPIC_API_KEY = "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"

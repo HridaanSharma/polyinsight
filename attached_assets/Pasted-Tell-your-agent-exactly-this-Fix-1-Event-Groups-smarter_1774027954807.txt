@@ -1,0 +1,248 @@
+Tell your agent exactly this:
+
+---
+
+**Fix 1 — Event Groups: smarter Claude prompt, more chains, reject bad ones:**
+
+```javascript
+const findChains = async (markets) => {
+  const marketList = markets.map((m, i) => {
+    const yes = parseFloat(JSON.parse(m.outcomePrices)[0])
+    const vol = parseFloat(m.volume24hr)
+    return `${i}. "${m.question}" | YES:${(yes*100).toFixed(1)}% | 24hVol:$${(vol/1000).toFixed(0)}K`
+  }).join('\n')
+
+  const response = await fetch('/proxy/claude', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 3000,
+      messages: [{
+        role: 'user',
+        content: `You are a financial analyst looking at live prediction markets.
+
+Here are the top 80 active Polymarket markets right now:
+${marketList}
+
+Find 12-15 groups where markets from COMPLETELY DIFFERENT categories are causally linked in the real world.
+
+STRICT RULES:
+1. Each group MUST cross categories — conflict + economics, politics + policy, monetary + markets
+2. The causal link must be DIRECT and OBVIOUS to a trader — not speculative or indirect
+3. REJECT any group where the link is weak, far-fetched, or requires many steps
+4. REJECT grouping sports games with geopolitics — these are not causally linked
+5. REJECT grouping UFO/alien markets with anything — these are not financially correlated
+6. REJECT putting same-topic markets together (all Iran together, all Bitcoin together)
+7. sideA = the TRIGGER (the thing that happens first)
+8. sideB = the REPRICING (markets that should move as a direct result)
+9. Every index you use MUST exist in the list above
+
+GOOD causal links (use these as inspiration, find the actual matching markets):
+- Fed holds rates → Bitcoin/risk assets drop (monetary policy directly affects crypto)
+- US invades Iran → Oil spikes (Hormuz disruption is immediate and direct)
+- Iran ceasefire → Oil drops (risk premium removed immediately)
+- Democrats win Senate → Policy bills pass (direct legislative causation)
+- Iran regime falls → Netanyahu odds change (regional power shift)
+- Trump tariffs → China GDP falls (direct trade impact)
+- Ukraine ceasefire → European energy prices drop (gas supply restored)
+- Taiwan invasion → Semiconductor shortage (TSMC produces 90% of chips)
+- US debt ceiling crisis → Dollar weakens (direct currency impact)
+
+BAD causal links (NEVER do these):
+- Any war → soccer matches (sports scheduling is not causally linked to wars)
+- Geopolitical chaos → alien disclosure (completely unrelated)
+- Iran conflict → Bitcoin (too indirect — many steps between)
+- Any conflict → "market stability indicators" (vague, not direct)
+
+Return ONLY a JSON array, no other text whatsoever:
+[
+  {
+    "theme": "Specific Cause → Specific Effect",
+    "emoji": "relevant emoji",
+    "description": "One sentence: the direct mechanism connecting these markets",
+    "sideA_label": "CAUSE",
+    "sideA_indices": [1, 4, 7],
+    "sideB_label": "EFFECT",
+    "sideB_indices": [12, 23]
+  }
+]
+
+Find as many VALID groups as the data supports. Quality over quantity — only include groups where the causal link is rock solid.`
+      }]
+    })
+  })
+
+  const data = await response.json()
+  try {
+    const text = data.content[0].text.trim()
+    const clean = text.replace(/```json|```/g, '').trim()
+    const chains = JSON.parse(clean)
+
+    return chains.map(chain => {
+      const sideAMarkets = chain.sideA_indices
+        .filter(i => i >= 0 && i < markets.length)
+        .map(i => markets[i])
+        .filter(Boolean)
+      
+      const sideBMarkets = chain.sideB_indices
+        .filter(i => i >= 0 && i < markets.length)
+        .map(i => markets[i])
+        .filter(Boolean)
+
+      if (sideAMarkets.length < 1 || sideBMarkets.length < 1) return null
+
+      // Reject if sideA and sideB share the same topic keywords
+      const sideATopics = sideAMarkets.map(m => m.question.toLowerCase()).join(' ')
+      const sideBTopics = sideBMarkets.map(m => m.question.toLowerCase()).join(' ')
+      
+      const iranA = sideATopics.includes('iran')
+      const iranB = sideBTopics.includes('iran')
+      if (iranA && iranB) return null // both sides Iran = same topic
+
+      const bitcoinA = sideATopics.includes('bitcoin')
+      const bitcoinB = sideBTopics.includes('bitcoin')
+      if (bitcoinA && bitcoinB) return null // both sides Bitcoin = same topic
+
+      const allMkts = [...sideAMarkets, ...sideBMarkets]
+      const totalVol = allMkts.reduce((s, m) =>
+        s + parseFloat(m.volume24hr || 0), 0)
+      
+      const movedMarkets = allMkts.filter(m =>
+        Math.abs(parseFloat(m.priceChange24h || 0)) > 0.03
+      )
+
+      return {
+        theme: chain.theme,
+        emoji: chain.emoji,
+        description: chain.description,
+        sideA: { label: chain.sideA_label, markets: sideAMarkets },
+        sideB: { label: chain.sideB_label, markets: sideBMarkets },
+        totalVol,
+        movedCount: movedMarkets.length,
+        hasMovement: movedMarkets.length > 0
+      }
+    }).filter(Boolean)
+  } catch(e) {
+    console.error('Claude parse error:', e, data)
+    return []
+  }
+}
+
+// Send top 80 markets but in TWO batches of 40
+// This gives Claude more variety to find non-Iran chains
+const batch1 = top80.slice(0, 40)
+const batch2 = top80.slice(40, 80)
+const [chains1, chains2] = await Promise.all([
+  findChains(batch1),
+  findChains(batch2)
+])
+
+// Combine and deduplicate
+const allChains = [...chains1, ...chains2]
+  .filter((c, i, arr) =>
+    arr.findIndex(x => x.theme === c.theme) === i
+  )
+  .sort((a, b) => b.totalVol - a.totalVol)
+```
+
+---
+
+**Fix 2 — Volume Spikes: scan ALL 500 markets purely mathematically:**
+
+```javascript
+const res = await fetch('/proxy/gamma/markets?active=true&closed=false&limit=500&order=volume24hr&ascending=false')
+const all = await res.json()
+
+const spikes = all
+  .filter(m => {
+    try {
+      const vol24 = parseFloat(m.volume24hr || 0)
+      const volTotal = parseFloat(m.volumeClob || m.volume || 0)
+      const daysOld = (Date.now() - new Date(m.startDate || m.createdAt)) / 86400000
+      const yes = parseFloat(JSON.parse(m.outcomePrices)[0])
+
+      // Pure math filters only
+      if (daysOld < 21) return false        // needs baseline
+      if (vol24 < 100000) return false      // real money today
+      if (volTotal < 100000) return false   // enough history
+      if (yes < 0.06 || yes > 0.94) return false // genuinely uncertain
+
+      const avgDaily = volTotal / daysOld
+      if (avgDaily < 1000) return false     // skip markets with tiny history
+
+      const spike = vol24 / avgDaily
+      m._spike = spike
+      m._avgDaily = avgDaily
+      m._daysOld = Math.round(daysOld)
+
+      return spike >= 3
+    } catch { return false }
+  })
+  .sort((a, b) => b._spike - a._spike)
+  .slice(0, 20)
+```
+
+---
+
+**Fix 3 — Spread Scanner: scan ALL 500 markets using Gamma bestBid/bestAsk but fetch live CLOB for top candidates:**
+
+```javascript
+// Phase 1: use Gamma data to find candidates fast
+const res = await fetch('/proxy/gamma/markets?active=true&closed=false&limit=500&order=volume24hr&ascending=false')
+const all = await res.json()
+
+// Find candidates with Gamma data first
+const candidates = all.filter(m => {
+  const bid = parseFloat(m.bestBid || 0)
+  const ask = parseFloat(m.bestAsk || 0)
+  const vol24 = parseFloat(m.volume24hr || 0)
+  if (!bid || !ask) return false
+  if (bid < 0.05 || ask > 0.95) return false
+  if (vol24 < 1000) return false
+  const spread = ask - bid
+  return spread > 0.01
+}).sort((a,b) => {
+  const spreadA = parseFloat(a.bestAsk) - parseFloat(a.bestBid)
+  const spreadB = parseFloat(b.bestAsk) - parseFloat(b.bestBid)
+  return spreadB - spreadA
+}).slice(0, 50) // top 50 candidates
+
+// Phase 2: fetch live CLOB for these 50 in parallel
+const liveSpread = async (market) => {
+  try {
+    const tokenId = JSON.parse(market.clobTokenIds)[0]
+    const res = await fetch(`/proxy/clob/book?token_id=${tokenId}`)
+    const book = await res.json()
+
+    if (!book.bids?.length || !book.asks?.length) return null
+
+    const bestBid = parseFloat(book.bids[0].price)
+    const bestAsk = parseFloat(book.asks[0].price)
+    const spread = bestAsk - bestBid
+
+    if (bestBid < 0.05 || bestAsk > 0.95) return null
+    if (spread < 0.01) return null
+
+    return {
+      question: market.question,
+      conditionId: market.conditionId,
+      slug: market.slug,
+      url: market.url,
+      bestBid,
+      bestAsk,
+      spread,
+      spreadCents: Math.round(spread * 100),
+      volume24hr: parseFloat(market.volume24hr)
+    }
+  } catch { return null }
+}
+
+const results = await Promise.all(candidates.map(liveSpread))
+const validSpreads = results
+  .filter(Boolean)
+  .sort((a,b) => b.spread - a.spread)
+  .slice(0, 30)
+```
+
+This scans all 500 markets for candidates using fast Gamma data, then verifies the top 50 with live CLOB data. You get real spreads across the entire platform, not just pre-filtered categories.

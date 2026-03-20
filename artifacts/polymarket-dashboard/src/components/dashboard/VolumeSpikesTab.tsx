@@ -60,17 +60,17 @@ export function VolumeSpikesTab({ markets }: VolumeSpikesTabProps) {
 
       // Must have total volume to calculate a meaningful average
       const volTotal = parseFloat((m.volumeClob || m.volume || 0) as any) || 0;
-      if (volTotal < 50000) continue;
+      if (volTotal < 100000) continue;
 
       // Must be genuinely uncertain — not basically resolved
       const prob = getProb(m);
-      if (prob < 0.05 || prob > 0.95) continue;
+      if (prob < 0.06 || prob > 0.94) continue;
 
       // Calculate spike score against historical daily average
       const avgDaily = volTotal / daysOld;
-      if (avgDaily <= 0) continue;
+      if (avgDaily < 1000) continue; // skip markets with tiny trading history
       const score = vol24 / avgDaily;
-      if (score < 4) continue;
+      if (score < 3) continue;
 
       // Price must move alongside volume — pure volume without price move
       // = single large order, not informed trading
@@ -101,8 +101,8 @@ export function VolumeSpikesTab({ markets }: VolumeSpikesTabProps) {
         <div>
           <h3 className="font-bold text-lg leading-none mb-1">Unusual Activity Detected</h3>
           <p className="text-sm text-red-400/80">
-            Pure math: any market 21+ days old doing 4× its daily average, with ≥3% price movement today.
-            No category filters — if the math says something's unusual, it shows up.
+            Pure math: any market 21+ days old doing 3× its daily average, with ≥3% price movement today.
+            Scans all 500 markets — no category filters.
           </p>
         </div>
       </div>
@@ -112,7 +112,7 @@ export function VolumeSpikesTab({ markets }: VolumeSpikesTabProps) {
           <TrendingUp size={48} className="mb-4 opacity-20" />
           <p>No genuine volume spikes detected right now.</p>
           <p className="text-xs mt-2 text-muted-foreground/60">
-            Requires 4× spike vs 21-day baseline, $100K/24h, ≥3% price move, and 5–95% probability.
+            Requires 3× spike vs 21-day baseline, $100K/24h, ≥3% price move, and 6–94% probability.
           </p>
         </div>
       ) : (

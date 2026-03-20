@@ -37,10 +37,10 @@ export function SpreadScannerTab({ spreads, isLoading, isRefreshing, onRefresh }
       <div className="flex flex-col items-center justify-center py-32 space-y-4 animate-in fade-in duration-300">
         <Loader2 className="h-10 w-10 animate-spin text-primary/60" />
         <p className="text-muted-foreground font-mono text-sm animate-pulse">
-          Scanning 200 active markets for spreads...
+          Scanning 500 markets for spreads...
         </p>
         <p className="text-xs text-muted-foreground/60 font-mono">
-          Filtering bid 5–95¢ · spread &gt; 2¢ · vol &gt; $2K
+          Phase 1: Gamma filter · Phase 2: CLOB verify top 50
         </p>
       </div>
     );
@@ -56,7 +56,7 @@ export function SpreadScannerTab({ spreads, isLoading, isRefreshing, onRefresh }
             Live Spread Scanner
           </h3>
           <p className="text-sm text-muted-foreground mt-0.5">
-            {spreads.length} markets with spread &gt; 2¢, bid 5–95¢, vol &gt; $2K — sorted widest first
+            {spreads.length} markets — scanned all 500, CLOB-verified top 50 — sorted widest first
           </p>
         </div>
         <Button variant="outline" size="sm" onClick={onRefresh} disabled={isRefreshing}>

@@ -77,19 +77,17 @@ function parseClobTokenId(raw: string | string[]): string | null {
   }
 }
 
-// Use the event slug (not the market slug) for correct Polymarket URLs
 function getTradeUrl(m: GammaMarket): string {
   const eventSlug = m.events?.[0]?.slug;
   if (eventSlug) return `https://polymarket.com/event/${eventSlug}`;
   return `https://polymarket.com/event/${m.slug}`;
 }
 
-// ── Filter & enrich a single market ──────────────────────────────────────────
 function enrichMarket(m: GammaMarket): ChainMarket | null {
   try {
     const yes = parseFloat(JSON.parse(m.outcomePrices || '["0.5"]')[0]);
     if (yes <= 0.04 || yes >= 0.96) return null;
-    if (parseFloat(m.volume24hr as any) < 5000) return null;
+    if (parseFloat(m.volume24hr as any) < 3000) return null;
     const change = parseFloat((m.oneDayPriceChange ?? m.priceChange ?? 0) as any);
     return {
       ...m,
@@ -101,6 +99,52 @@ function enrichMarket(m: GammaMarket): ChainMarket | null {
   } catch {
     return null;
   }
+}
+
+// ── Categorize a market by its question text ──────────────────────────────────
+function categorizeMarket(m: GammaMarket): string {
+  const q = m.question.toLowerCase();
+  if (q.includes("iran") || q.includes("israel") || q.includes("ukraine") ||
+      q.includes("russia") || q.includes("taiwan") || q.includes(" war") ||
+      q.includes("invade") || q.includes("military") || q.includes("ceasefire") ||
+      q.includes("kharg") || q.includes("hormuz"))
+    return "conflict";
+  if (q.includes("crude oil") || q.includes("oil price") || q.includes("brent") ||
+      q.includes("natural gas") || q.includes("energy price"))
+    return "energy";
+  if (q.includes("bitcoin") || q.includes("ethereum") || q.includes("crypto") ||
+      q.includes("xrp") || q.includes("solana") || q.includes(" btc"))
+    return "crypto";
+  if (q.includes("fed ") || q.includes("federal reserve") || q.includes("interest rate") ||
+      q.includes(" bps") || q.includes("fomc") || q.includes("inflation rate"))
+    return "monetary";
+  if (q.includes("trump") || q.includes("democrat") || q.includes("republican") ||
+      q.includes("senate") || q.includes("house seat") || q.includes("us election") ||
+      q.includes("midterm") || q.includes("us president"))
+    return "uspolitics";
+  if (q.includes("china") || q.includes("xi jinping") || q.includes("beijing") ||
+      q.includes("tariff") || q.includes("trade war"))
+    return "china";
+  if (q.includes("s&p") || q.includes("nasdaq") || q.includes("stock market") ||
+      q.includes("dow jones") || q.includes("market cap") || q.includes("equity"))
+    return "equities";
+  if (q.includes("gdp") || q.includes("recession") || q.includes("unemployment") ||
+      q.includes("us economy") || q.includes("economic growth"))
+    return "economics";
+  if (q.includes("netanyahu") || q.includes("putin") || q.includes("zelensky") ||
+      q.includes("modi") || q.includes("macron") || q.includes("merz") ||
+      q.includes("prime minister") || q.includes("president of "))
+    return "leadership";
+  if (q.includes("climate") || q.includes("bill passes") || q.includes("legislation") ||
+      q.includes("congress passes") || q.includes("signed into law"))
+    return "policy";
+  if (q.includes(" gold ") || q.includes("silver price") || q.includes("us dollar") ||
+      q.includes(" yen") || q.includes(" euro") || q.includes("currency"))
+    return "currency";
+  if (q.includes("nuclear") || q.includes("nato") || q.includes(" un ") ||
+      q.includes("sanctions") || q.includes("diplomatic") || q.includes("treaty"))
+    return "diplomacy";
+  return "other";
 }
 
 // ── Fetch 500 markets from Gamma ─────────────────────────────────────────────
@@ -125,95 +169,99 @@ export function useAllMarkets() {
   });
 }
 
-// ── Build single Claude prompt — all 200 markets, compressed pipe format ──────
+// ── Build diverse market set: top 15 per category ────────────────────────────
+function buildDiverseSet(allMarkets: GammaMarket[]): GammaMarket[] {
+  const byCategory: Record<string, GammaMarket[]> = {};
+  for (const m of allMarkets) {
+    const cat = categorizeMarket(m);
+    if (!byCategory[cat]) byCategory[cat] = [];
+    byCategory[cat].push(m);
+  }
+
+  const catSummary = Object.entries(byCategory)
+    .map(([k, v]) => `${k}:${v.length}`)
+    .join(", ");
+  console.log("Markets by category:", catSummary);
+
+  const diverse: GammaMarket[] = [];
+  for (const cat of Object.keys(byCategory)) {
+    const top15 = byCategory[cat]
+      .sort((a, b) => parseFloat(b.volume24hr as any) - parseFloat(a.volume24hr as any))
+      .slice(0, 15);
+    diverse.push(...top15);
+  }
+
+  // Deduplicate by conditionId
+  const seen = new Set<string>();
+  const final = diverse.filter(m => {
+    if (seen.has(m.conditionId)) return false;
+    seen.add(m.conditionId);
+    return true;
+  });
+
+  console.log("Diverse set size:", final.length, "| Categories:", Object.keys(byCategory).join(", "));
+  return final;
+}
+
+// ── Build Claude prompt with category-labeled markets ────────────────────────
 function buildChainPrompt(markets: GammaMarket[]): string {
   const lines = markets.map((m, i) => {
     const yes = parseFloat(JSON.parse(m.outcomePrices || '["0.5"]')[0]);
     const vol = parseFloat(m.volume24hr as any) || 0;
     const change = parseFloat((m.oneDayPriceChange ?? m.priceChange ?? 0) as any) || 0;
     const dir = change > 0.03 ? "\u25b2" : change < -0.03 ? "\u25bc" : "=";
-    return `${i}|${m.question}|${(yes * 100).toFixed(0)}%|$${(vol / 1000).toFixed(0)}K|${dir}`;
+    const cat = categorizeMarket(m).toUpperCase();
+    return `${i}.[${cat}] ${m.question} | ${(yes * 100).toFixed(0)}% | $${(vol / 1000).toFixed(0)}K | ${dir}`;
   });
+
   const marketList = lines.join("\n");
   const maxIdx = markets.length - 1;
 
   return (
-    `You are a senior macro trader analyzing ALL active Polymarket prediction markets.\n` +
-    `\n` +
-    `Format: index|question|probability|24h_volume|price_direction (\u25b2=up >3%, \u25bc=down >3%, ==flat)\n` +
-    `\n` +
-    `Here are all ${markets.length} active markets right now:\n` +
-    `${marketList}\n` +
-    `\n` +
-    `Find 15-20 groups where markets from COMPLETELY DIFFERENT topics are causally connected in the real world. A trader betting on one should ALSO check the other.\n` +
-    `\n` +
-    `=== VALID CAUSAL CHAINS ===\n` +
-    `\n` +
-    `CONFLICT \u2192 COMMODITY (direct supply disruption):\n` +
-    `- "US invades Iran" + "Crude oil hits $100" \u2192 Hormuz disruption spikes oil\n` +
-    `- "Iran ceasefire" + "Crude oil drops" \u2192 ceasefire removes risk premium\n` +
-    `- "Ukraine ceasefire" + "European gas prices drop" \u2192 pipelines reopen\n` +
-    `- "Russia attacks NATO" + "Gold hits $3000" \u2192 war = flight to safety\n` +
-    `\n` +
-    `MONETARY POLICY \u2192 RISK ASSETS (direct rate mechanism):\n` +
-    `- "Fed holds rates" + "Bitcoin dips" \u2192 high rates = risk off = crypto sells\n` +
-    `- "Fed cuts rates" + "Bitcoin rallies" \u2192 rate cuts = risk on\n` +
-    `- "Fed holds rates" + "S&P500 drops" \u2192 tight policy pressures equities\n` +
-    `- "Inflation stays high" + "Fed cuts rates" \u2192 logically inconsistent pair\n` +
-    `\n` +
-    `POLITICS \u2192 POLICY (direct legislative path):\n` +
-    `- "Democrats win Senate" + "Climate bill passes" \u2192 need Senate majority\n` +
-    `- "Republicans win House" + "Tax cuts extended" \u2192 house controls budget\n` +
-    `- "Trump wins" + "US leaves Paris Agreement" \u2192 direct executive action\n` +
-    `\n` +
-    `TRADE POLICY \u2192 ECONOMICS (direct trade impact):\n` +
-    `- "Trump tariffs on China" + "China GDP below 4%" \u2192 tariffs hurt exports directly\n` +
-    `- "US trade war" + "Recession 2026" \u2192 trade disruption = slowdown\n` +
-    `- "Trump tariffs on EU" + "Euro weakens" \u2192 trade war = currency pressure\n` +
-    `\n` +
-    `GEOPOLITICAL EVENT \u2192 DIPLOMACY (direct relationship impact):\n` +
-    `- "China invades Taiwan" + "Trump visits China" \u2192 invasion ends diplomacy\n` +
-    `- "Iran regime falls" + "Netanyahu survives" \u2192 removes his main threat\n` +
-    `- "Russia-Ukraine peace" + "NATO expansion" \u2192 peace reshapes alliance\n` +
-    `\n` +
-    `LEADERSHIP \u2192 POLICY (direct decision-making power):\n` +
-    `- "Netanyahu removed" + "Gaza ceasefire" \u2192 new leader enables deal\n` +
-    `- "Putin leaves power" + "Ukraine ceasefire" \u2192 new leader negotiates\n` +
-    `- "Iran leadership change" + "Iran nuclear deal" \u2192 new leader reopens talks\n` +
-    `\n` +
-    `FINANCIAL \u2192 FINANCIAL (direct contagion):\n` +
-    `- "US debt ceiling crisis" + "Dollar index drops" \u2192 default fear = dollar weakness\n` +
-    `- "US government shutdown" + "Market volatility" \u2192 shutdown = uncertainty\n` +
-    `- "Banking crisis" + "Fed emergency cuts" \u2192 crisis forces Fed hand\n` +
-    `\n` +
-    `=== NEVER DO THESE ===\n` +
-    `- Sports games (vs, @, win on 2026-) with ANYTHING\n` +
-    `- Elon tweets counting with ANYTHING\n` +
-    `- Eurovision/F1/NBA/NHL/soccer with politics\n` +
-    `- UFO/alien markets with ANYTHING\n` +
-    `- Same topic on both sides: all Iran together, all Bitcoin together, all Fed together, all oil together\n` +
-    `- Iran conflict + Bitcoin (too many steps, not direct)\n` +
-    `- Bitcoin price targets + Bitcoin price targets (same topic)\n` +
-    `\n` +
-    `=== RULES ===\n` +
-    `1. Both sides MUST be from different topics/categories\n` +
-    `2. Causal link must be ONE direct step\n` +
-    `3. Each side needs minimum 2 markets\n` +
-    `4. Only use indices that actually exist: 0\u2013${maxIdx}\n` +
-    `5. Find AT LEAST 15 valid groups\n` +
-    `6. Include chains from different topics — don't just find Iran chains\n` +
-    `7. Look across ALL ${markets.length} markets — elections, economics, tech, crypto, geopolitics, policy\n` +
-    `\n` +
-    `Return ONLY a JSON array. Zero other text:\n` +
+    `You are a senior macro trader. These are ALL active Polymarket markets right now, organized by category:\n\n` +
+    `${marketList}\n\n` +
+    `Find 15-20 causal chains where markets from DIFFERENT categories move together.\n\n` +
+    `The category tags [CONFLICT], [ENERGY], [MONETARY], [CRYPTO], [USPOLITICS], [CHINA], [EQUITIES], [ECONOMICS], [LEADERSHIP], [POLICY], [CURRENCY], [DIPLOMACY] show you what each market is about.\n\n` +
+    `A valid chain MUST connect two DIFFERENT category tags. Examples:\n` +
+    `- [CONFLICT] \u2192 [ENERGY]: Iran invasion disrupts Hormuz, oil spikes \u2705\n` +
+    `- [MONETARY] \u2192 [CRYPTO]: Fed holds rates, Bitcoin drops \u2705\n` +
+    `- [USPOLITICS] \u2192 [POLICY]: Democrats win Senate, climate bill passes \u2705\n` +
+    `- [CHINA] \u2192 [ECONOMICS]: Trump tariffs on China, US recession risk rises \u2705\n` +
+    `- [LEADERSHIP] \u2192 [DIPLOMACY]: Netanyahu removed, Gaza ceasefire possible \u2705\n` +
+    `- [CONFLICT] \u2192 [LEADERSHIP]: Iran regime falls, Netanyahu threat removed \u2705\n` +
+    `- [MONETARY] \u2192 [EQUITIES]: Fed cuts rates, S&P rallies \u2705\n` +
+    `- [CHINA] \u2192 [DIPLOMACY]: China invades Taiwan, Trump-Xi summit impossible \u2705\n` +
+    `- [ENERGY] \u2192 [MONETARY]: Oil spikes cause inflation, Fed delays cuts \u2705\n` +
+    `- [CONFLICT] \u2192 [CURRENCY]: War escalates, dollar strengthens as safe haven \u2705\n` +
+    `- [ECONOMICS] \u2192 [MONETARY]: Recession hits, Fed forced to cut rates \u2705\n` +
+    `- [USPOLITICS] \u2192 [ECONOMICS]: Republicans win Congress, tax cuts extend \u2705\n\n` +
+    `INVALID \u2014 same category both sides:\n` +
+    `- [CONFLICT] \u2192 [CONFLICT]: all Iran markets together \u274c\n` +
+    `- [ENERGY] \u2192 [ENERGY]: all oil markets together \u274c\n` +
+    `- [MONETARY] \u2192 [MONETARY]: all Fed markets together \u274c\n` +
+    `- [CRYPTO] \u2192 [CRYPTO]: Bitcoin + Ethereum together \u274c\n` +
+    `- [CONFLICT] \u2192 [CRYPTO]: war + Bitcoin (too indirect) \u274c\n` +
+    `- [ENERGY] \u2192 [CRYPTO]: oil + Bitcoin (too indirect) \u274c\n\n` +
+    `RULES:\n` +
+    `1. Each group MUST show two different category tags\n` +
+    `2. Direct one-step causal mechanism only\n` +
+    `3. Minimum 2 markets per side\n` +
+    `4. Only use indices that exist in the list (0\u2013${maxIdx})\n` +
+    `5. Find chains across ALL categories \u2014 not just CONFLICT/ENERGY/MONETARY\n` +
+    `6. Specifically look for: USPOLITICS\u2192POLICY, LEADERSHIP\u2192DIPLOMACY, CHINA\u2192ECONOMICS, MONETARY\u2192EQUITIES chains\n` +
+    `7. Return AT LEAST 15 chains\n\n` +
+    `Return ONLY JSON array, zero other text:\n` +
     `[\n` +
     `  {\n` +
-    `    "theme": "Cause \u2192 Direct Effect",\n` +
-    `    "emoji": "one emoji",\n` +
-    `    "description": "One sentence: exact real-world mechanism",\n` +
+    `    "theme": "Cause \u2192 Effect",\n` +
+    `    "emoji": "emoji",\n` +
+    `    "description": "One sentence direct mechanism",\n` +
     `    "sideA_label": "CAUSE LABEL",\n` +
+    `    "sideA_category": "conflict",\n` +
     `    "sideA_indices": [3, 7, 12],\n` +
     `    "sideB_label": "EFFECT LABEL",\n` +
-    `    "sideB_indices": [45, 67, 89]\n` +
+    `    "sideB_category": "energy",\n` +
+    `    "sideB_indices": [45, 67]\n` +
     `  }\n` +
     `]`
   );
@@ -236,11 +284,20 @@ function filterChain(chain: any, markets: GammaMarket[]): CrossChain | null {
     return null;
   }
 
+  // Reject same category on both sides
+  const catA = (chain.sideA_category || "").toLowerCase();
+  const catB = (chain.sideB_category || "").toLowerCase();
+  if (catA && catB && catA === catB) {
+    console.log("Rejected same category:", chain.theme, `(${catA})`);
+    return null;
+  }
+
   const textA = groupA.map(m => m.question.toLowerCase()).join(" ");
   const textB = groupB.map(m => m.question.toLowerCase()).join(" ");
   const allText = textA + " " + textB;
+  const desc = (chain.description || "").toLowerCase();
 
-  // Hard reject: sports on either side
+  // Hard reject: sports noise
   const SPORTS_KW = [" vs ", " vs. ", " @ ", "win on 2026", "win on 2025", "nba", "nfl",
     "nhl", "mlb", "soccer", "football match", "basketball", "hockey game",
     "champions league", "premier league", "world cup", "super bowl",
@@ -254,22 +311,31 @@ function filterChain(chain: any, markets: GammaMarket[]): CrossChain | null {
   if (allText.includes("tweets from") || allText.includes("post 2") ||
     allText.includes("post 3") || allText.includes("post 4")) return null;
 
-  // Hard reject: same topic on both sides
-  const SAME_TOPIC_PAIRS: [string, string][] = [
-    ["iran", "iran"], ["bitcoin", "bitcoin"], ["btc", "btc"],
-    ["crude oil", "crude oil"], ["oil price", "oil price"], ["crude", "crude"],
-    ["federal reserve", "federal reserve"], ["fed rate", "fed rate"], ["fed ", "fed "],
-    ["interest rate", "interest rate"], ["israel", "israel"],
-    ["ukraine", "ukraine"], ["taiwan", "taiwan"],
-    ["election 2026", "election 2026"], ["trump tariff", "trump tariff"],
-    ["ethereum", "ethereum"], ["trump", "trump"],
-  ];
-  for (const [kA, kB] of SAME_TOPIC_PAIRS) {
-    if (textA.includes(kA) && textB.includes(kB)) {
-      console.log("Rejected same-topic:", chain.theme, "| topic:", kA);
-      return null;
-    }
+  // Hard reject: conflict/energy → crypto (too indirect)
+  const hasConflictA = textA.includes("iran") || textA.includes("invade") ||
+    textA.includes("military") || textA.includes("ceasefire") || textA.includes("war");
+  const hasEnergyA = textA.includes("crude oil") || textA.includes("oil price") || textA.includes("brent");
+  const hasCryptoB = textB.includes("bitcoin") || textB.includes("ethereum") ||
+    textB.includes("crypto") || textB.includes("xrp");
+  if ((hasConflictA || hasEnergyA) && hasCryptoB) {
+    console.log("Rejected conflict/energy→crypto:", chain.theme);
+    return null;
   }
+
+  // Hard reject: speculative framing
+  if (desc.includes("tests whether") || desc.includes("safe haven test")) {
+    console.log("Rejected speculative framing:", chain.theme);
+    return null;
+  }
+
+  // Hard reject: war + market cap (no direct mechanism)
+  const hasWar = allText.includes("invade") || allText.includes("forces enter");
+  const hasMarketCap = allText.includes("largest company") || allText.includes("market cap");
+  if (hasWar && hasMarketCap) return null;
+
+  // Hard reject: circular oil↔Fed
+  if (textA.includes("crude oil") && textB.includes(" fed ")) return null;
+  if (textA.includes(" fed ") && textB.includes("crude oil")) return null;
 
   const allMkts = [...groupA, ...groupB];
   const totalVolume = allMkts.reduce((s, m) => s + parseFloat((m.volume24hr || 0) as any), 0);
@@ -305,24 +371,22 @@ function parseChainsFromResponse(data: any, markets: GammaMarket[]): CrossChain[
   }
 }
 
-// ── Fetch AI chains: ONE Claude call with all 200 markets ─────────────────────
+// ── Fetch AI chains: category-diverse selection → one Claude call ─────────────
 async function fetchAiChains(allMarkets: GammaMarket[]): Promise<CrossChain[]> {
   // Filter to uncertain, active markets with real volume
-  const top200 = [...allMarkets]
-    .filter(m => {
-      try {
-        const yes = parseFloat(JSON.parse(m.outcomePrices || '["0.5"]')[0]);
-        const vol24 = parseFloat(m.volume24hr as any) || 0;
-        return yes > 0.05 && yes < 0.95 && vol24 > 5000 && m.active && !m.closed;
-      } catch { return false; }
-    })
-    .sort((a, b) => parseFloat(b.volume24hr as any) - parseFloat(a.volume24hr as any))
-    .slice(0, 200);
+  const meaningful = allMarkets.filter(m => {
+    try {
+      const yes = parseFloat(JSON.parse(m.outcomePrices || '["0.5"]')[0]);
+      const vol24 = parseFloat(m.volume24hr as any) || 0;
+      return yes > 0.05 && yes < 0.95 && vol24 > 3000 && m.active && !m.closed;
+    } catch { return false; }
+  });
 
-  if (top200.length < 20) return [];
+  // Build diverse set: top 15 per category instead of top 200 by volume
+  const diverseSet = buildDiverseSet(meaningful);
+  if (diverseSet.length < 20) return [];
 
-  console.log("Sending", top200.length, "markets to Claude in one call");
-  console.log("Top 5:", top200.slice(0, 5).map(m => m.question));
+  console.log("Sending", diverseSet.length, "markets to Claude (category-diverse)");
 
   const response = await fetch(`${BASE}/api/polymarket/claude`, {
     method: "POST",
@@ -330,7 +394,7 @@ async function fetchAiChains(allMarkets: GammaMarket[]): Promise<CrossChain[]> {
     body: JSON.stringify({
       model: "claude-sonnet-4-5",
       max_tokens: 8000,
-      messages: [{ role: "user", content: buildChainPrompt(top200) }],
+      messages: [{ role: "user", content: buildChainPrompt(diverseSet) }],
     }),
   });
 
@@ -344,11 +408,10 @@ async function fetchAiChains(allMarkets: GammaMarket[]): Promise<CrossChain[]> {
     return [];
   }
 
-  const chains = parseChainsFromResponse(data, top200);
+  const chains = parseChainsFromResponse(data, diverseSet);
   console.log("Valid chains after filtering:", chains.length);
 
   // ── Phase 1: market-reuse deduplication ──────────────────────────────────
-  // Reject chains where more than half of either side's markets already appeared
   const usedSideAMarkets = new Set<string>();
   const usedSideBMarkets = new Set<string>();
 
@@ -359,56 +422,23 @@ async function fetchAiChains(allMarkets: GammaMarket[]): Promise<CrossChain[]> {
       const sideBIds = chain.groupB.map(m => m.conditionId);
       const sideAOverlap = sideAIds.filter(id => usedSideAMarkets.has(id)).length;
       const sideBOverlap = sideBIds.filter(id => usedSideBMarkets.has(id)).length;
-      if (sideAOverlap > sideAIds.length / 2) return false;
-      if (sideBOverlap > sideBIds.length / 2) return false;
+      if (sideAOverlap > sideAIds.length * 0.6) return false;
+      if (sideBOverlap > sideBIds.length * 0.6) return false;
       sideAIds.forEach(id => usedSideAMarkets.add(id));
       sideBIds.forEach(id => usedSideBMarkets.add(id));
       return true;
     });
 
-  // ── Phase 2: hard-reject weak/speculative patterns ────────────────────────
+  // ── Phase 2: deduplicate by identical sideA market set ───────────────────
+  const seenSideA = new Set<string>();
   return deduped
     .filter(chain => {
-      const desc = chain.description.toLowerCase();
-      const sideAText = chain.groupA.map(m => m.question.toLowerCase()).join(" ");
-      const sideBText = chain.groupB.map(m => m.question.toLowerCase()).join(" ");
-      const allText = sideAText + " " + sideBText;
-
-      // Reject Iran → Bitcoin (not a direct mechanism)
-      if (chain.groupA.some(m => m.question.toLowerCase().includes("iran")) &&
-          chain.groupB.some(m => m.question.toLowerCase().includes("bitcoin"))) {
-        console.log("Rejected Iran→Bitcoin:", chain.theme);
-        return false;
-      }
-
-      // Reject Oil → Bitcoin (not a direct mechanism)
-      if (chain.groupA.some(m => m.question.toLowerCase().includes("crude oil")) &&
-          chain.groupB.some(m => m.question.toLowerCase().includes("bitcoin"))) {
-        console.log("Rejected Oil→Bitcoin:", chain.theme);
-        return false;
-      }
-
-      // Reject speculative "tests whether" framing
-      if (desc.includes("tests whether") || desc.includes("safe haven test")) {
-        console.log("Rejected speculative framing:", chain.theme);
-        return false;
-      }
-
-      // Reject war + stock market cap (no direct mechanism)
-      const hasWar = allText.includes("invade") || allText.includes("forces enter");
-      const hasMarketCap = allText.includes("largest company") || allText.includes("market cap");
-      if (hasWar && hasMarketCap) {
-        console.log("Rejected war+market cap:", chain.theme);
-        return false;
-      }
-
-      // Reject circular: oil→Fed or Fed→oil
-      if (sideAText.includes("crude oil") && sideBText.includes(" fed ")) return false;
-      if (sideAText.includes(" fed ") && sideBText.includes("crude oil")) return false;
-
+      const key = chain.groupA.map(m => m.conditionId).sort().join(",");
+      if (seenSideA.has(key)) return false;
+      seenSideA.add(key);
       return true;
     })
-    .slice(0, 15);
+    .slice(0, 20);
 }
 
 // ── Cross-category causal chains — fully AI-driven ───────────────────────────
@@ -416,7 +446,6 @@ export function useCausalChains() {
   const qc = useQueryClient();
   const { data: allMarkets = [], isLoading: marketsLoading, error, refetch: refetchMarkets, isFetching } = useAllMarkets();
 
-  // Claude discovers all chains dynamically. Cached 30 min — no hardcoded lists.
   const { data: chains = [], isLoading: aiLoading } = useQuery({
     queryKey: ["ai-chains-v2", allMarkets.length > 0 ? allMarkets[0]?.id : "empty"],
     queryFn: () => fetchAiChains(allMarkets),
@@ -425,7 +454,6 @@ export function useCausalChains() {
     retry: 1,
   });
 
-  // Refresh: get fresh markets from Gamma, then force Claude to re-analyze
   const refetch = async () => {
     await refetchMarkets();
     await qc.invalidateQueries({ queryKey: ["ai-chains-v2"] });
@@ -466,7 +494,6 @@ export function useLiveSpreadScanner() {
   return useQuery({
     queryKey: ["live-spreads"],
     queryFn: async (): Promise<SpreadData[]> => {
-      // Phase 1: fetch all 500 markets via Gamma (5 pages in parallel)
       const pages = await Promise.all(
         [0, 100, 200, 300, 400].map(offset =>
           fetch(`${BASE}/api/polymarket/markets?limit=100&offset=${offset}&active=true&closed=false&order=volume24hr&ascending=false`)
@@ -476,7 +503,6 @@ export function useLiveSpreadScanner() {
       const allMarkets: GammaMarket[] = (pages.flat() as GammaMarket[])
         .filter(m => m.active === true && m.closed === false);
 
-      // Filter candidates using Gamma bestBid/bestAsk for speed
       const candidates = allMarkets
         .filter(m => {
           const bid = parseFloat(m.bestBid as any);
@@ -494,7 +520,6 @@ export function useLiveSpreadScanner() {
         })
         .slice(0, 50);
 
-      // Phase 2: verify top 50 with live CLOB in parallel
       const results = await Promise.all(
         candidates.map(async m => {
           try {
@@ -521,7 +546,6 @@ export function useLiveSpreadScanner() {
         .sort((a, b) => b.spread - a.spread)
         .slice(0, 30);
 
-      // Fallback: use Gamma data if CLOB returns nothing
       if (valid.length === 0) {
         return candidates
           .map(m => ({

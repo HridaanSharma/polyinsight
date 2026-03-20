@@ -1,0 +1,310 @@
+These 3 are valid but the problem is clear — Claude is only finding Iran/Oil/Fed/Crypto because those dominate the top 200 by volume. The rest of the 200 markets (elections, policy, geopolitics, diplomacy) are being ignored because Claude runs out of "attention" on the high-volume markets.
+
+Tell your agent exactly this:
+
+---
+
+**Root cause fix — force Claude to scan diverse market categories, not just high volume:**
+
+```javascript
+const findAllChains = async () => {
+
+  // STEP 1: Fetch 500 markets fresh
+  const res = await fetch(
+    '/proxy/gamma/markets?active=true&closed=false&limit=500&order=volume24hr&ascending=false&_t=' + Date.now()
+  )
+  const all = await res.json()
+
+  // STEP 2: Filter meaningful markets
+  const meaningful = all.filter(m => {
+    try {
+      const yes = parseFloat(JSON.parse(m.outcomePrices)[0])
+      const vol24 = parseFloat(m.volume24hr || 0)
+      return yes > 0.05 && yes < 0.95 &&
+        vol24 > 3000 &&
+        m.active === true &&
+        m.closed === false
+    } catch { return false }
+  })
+
+  // STEP 3: Instead of just top 200 by volume (which is all Iran/Oil/Fed),
+  // build a DIVERSE set by categorizing markets first
+  
+  const categorize = (m) => {
+    const q = m.question.toLowerCase()
+    if (q.includes('iran') || q.includes('israel') || q.includes('ukraine') || 
+        q.includes('russia') || q.includes('taiwan') || q.includes('war') ||
+        q.includes('invade') || q.includes('military') || q.includes('ceasefire')) 
+      return 'conflict'
+    if (q.includes('crude oil') || q.includes('oil price') || q.includes('brent') ||
+        q.includes('natural gas') || q.includes('energy'))
+      return 'energy'
+    if (q.includes('bitcoin') || q.includes('ethereum') || q.includes('crypto') ||
+        q.includes('xrp') || q.includes('solana') || q.includes('btc'))
+      return 'crypto'
+    if (q.includes('fed ') || q.includes('federal reserve') || q.includes('interest rate') ||
+        q.includes('bps') || q.includes('fomc') || q.includes('inflation'))
+      return 'monetary'
+    if (q.includes('trump') || q.includes('democrat') || q.includes('republican') ||
+        q.includes('senate') || q.includes('house ') || q.includes('election') ||
+        q.includes('midterm') || q.includes('president'))
+      return 'uspolitics'
+    if (q.includes('china') || q.includes('xi jinping') || q.includes('beijing') ||
+        q.includes('tariff') || q.includes('trade war'))
+      return 'china'
+    if (q.includes('s&p') || q.includes('nasdaq') || q.includes('stock') ||
+        q.includes('market cap') || q.includes('dow') || q.includes('equity'))
+      return 'equities'
+    if (q.includes('gdp') || q.includes('recession') || q.includes('unemployment') ||
+        q.includes('economy') || q.includes('growth'))
+      return 'economics'
+    if (q.includes('netanyahu') || q.includes('putin') || q.includes('zelensky') ||
+        q.includes('modi') || q.includes('macron') || q.includes('merz') ||
+        q.includes('leader') || q.includes('prime minister') || q.includes('president of'))
+      return 'leadership'
+    if (q.includes('climate') || q.includes('bill passes') || q.includes('legislation') ||
+        q.includes('congress') || q.includes('law') || q.includes('policy'))
+      return 'policy'
+    if (q.includes('gold') || q.includes('silver') || q.includes('dollar') ||
+        q.includes('yen') || q.includes('euro') || q.includes('currency'))
+      return 'currency'
+    if (q.includes('nuclear') || q.includes('nato') || q.includes('un ') ||
+        q.includes('sanctions') || q.includes('diplomacy') || q.includes('treaty'))
+      return 'diplomacy'
+    return 'other'
+  }
+
+  // Group markets by category
+  const byCategory = {}
+  meaningful.forEach(m => {
+    const cat = categorize(m)
+    if (!byCategory[cat]) byCategory[cat] = []
+    byCategory[cat].push(m)
+  })
+
+  console.log('Markets by category:', Object.entries(byCategory).map(([k,v]) => `${k}:${v.length}`).join(', '))
+
+  // STEP 4: Take top markets from EACH category — cap at 15 per category
+  // This forces diversity — not just the top 200 by volume
+  const diverseSet = []
+  const categoriesFound = Object.keys(byCategory)
+  
+  categoriesFound.forEach(cat => {
+    const sorted = byCategory[cat]
+      .sort((a,b) => parseFloat(b.volume24hr) - parseFloat(a.volume24hr))
+      .slice(0, 15) // top 15 per category
+    diverseSet.push(...sorted)
+  })
+
+  // Deduplicate by conditionId
+  const seen = new Set()
+  const finalSet = diverseSet.filter(m => {
+    if (seen.has(m.conditionId)) return false
+    seen.add(m.conditionId)
+    return true
+  })
+
+  console.log('Diverse set size:', finalSet.length)
+  console.log('Categories represented:', categoriesFound.join(', '))
+
+  // STEP 5: Build compressed market list WITH category labels
+  // This helps Claude understand what each market is about
+  const marketList = finalSet.map((m, i) => {
+    const yes = parseFloat(JSON.parse(m.outcomePrices)[0])
+    const vol = parseFloat(m.volume24hr)
+    const cat = categorize(m)
+    const change = parseFloat(m.priceChange24h || 0)
+    const arrow = change > 0.03 ? '▲' : change < -0.03 ? '▼' : '='
+    return `${i}.[${cat.toUpperCase()}] "${m.question}" | ${(yes*100).toFixed(0)}% | $${(vol/1000).toFixed(0)}K | ${arrow}`
+  }).join('\n')
+
+  // STEP 6: Claude call — now with categorized diverse markets
+  const response = await fetch('/proxy/claude', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 8000,
+      messages: [{
+        role: 'user',
+        content: `You are a senior macro trader. These are ALL active Polymarket markets right now, organized by category:
+
+${marketList}
+
+Find 15-20 causal chains where markets from DIFFERENT categories move together.
+
+The category tags [CONFLICT], [ENERGY], [MONETARY], [CRYPTO], [USPOLITICS], [CHINA], [EQUITIES], [ECONOMICS], [LEADERSHIP], [POLICY], [CURRENCY], [DIPLOMACY] show you what each market is about.
+
+A valid chain MUST connect two DIFFERENT category tags. Examples:
+- [CONFLICT] → [ENERGY]: Iran invasion disrupts Hormuz, oil spikes ✅
+- [MONETARY] → [CRYPTO]: Fed holds rates, Bitcoin drops ✅  
+- [USPOLITICS] → [POLICY]: Democrats win Senate, climate bill passes ✅
+- [CHINA] → [ECONOMICS]: Trump tariffs on China, US recession risk rises ✅
+- [LEADERSHIP] → [DIPLOMACY]: Netanyahu removed, Gaza ceasefire possible ✅
+- [CONFLICT] → [LEADERSHIP]: Iran regime falls, Netanyahu threat removed ✅
+- [MONETARY] → [EQUITIES]: Fed cuts rates, S&P rallies ✅
+- [CHINA] → [DIPLOMACY]: China invades Taiwan, Trump-Xi summit impossible ✅
+- [ENERGY] → [MONETARY]: Oil spikes cause inflation, Fed delays cuts ✅
+- [CONFLICT] → [CURRENCY]: War escalates, dollar strengthens as safe haven ✅
+- [ECONOMICS] → [MONETARY]: Recession hits, Fed forced to cut rates ✅
+- [USPOLITICS] → [ECONOMICS]: Republicans win Congress, tax cuts extend ✅
+
+INVALID — same category both sides:
+- [CONFLICT] → [CONFLICT]: all Iran markets together ❌
+- [ENERGY] → [ENERGY]: all oil markets together ❌
+- [MONETARY] → [MONETARY]: all Fed markets together ❌
+- [CRYPTO] → [CRYPTO]: Bitcoin + Ethereum together ❌
+- [CONFLICT] → [CRYPTO]: war + Bitcoin (too indirect) ❌
+- [ENERGY] → [CRYPTO]: oil + Bitcoin (too indirect) ❌
+
+RULES:
+1. Each group MUST show two different category tags
+2. Direct one-step causal mechanism only
+3. Minimum 2 markets per side
+4. Only use indices that exist in the list
+5. Find chains across ALL categories — not just CONFLICT/ENERGY/MONETARY
+6. Specifically look for: USPOLITICS→POLICY, LEADERSHIP→DIPLOMACY, CHINA→ECONOMICS, MONETARY→EQUITIES chains
+7. Return AT LEAST 15 chains
+
+Return ONLY JSON array, zero other text:
+[
+  {
+    "theme": "Cause → Effect",
+    "emoji": "emoji",
+    "description": "One sentence direct mechanism",
+    "sideA_label": "CAUSE LABEL",
+    "sideA_category": "conflict",
+    "sideA_indices": [3, 7, 12],
+    "sideB_label": "EFFECT LABEL", 
+    "sideB_category": "energy",
+    "sideB_indices": [45, 67]
+  }
+]`
+      }]
+    })
+  })
+
+  const data = await response.json()
+
+  if (!data.content?.[0]?.text) {
+    console.error('Claude API error:', JSON.stringify(data))
+    return
+  }
+
+  const text = data.content[0].text.trim()
+  console.log('Claude response start:', text.substring(0, 300))
+
+  let chains
+  try {
+    const clean = text.replace(/```json|```/g, '').trim()
+    chains = JSON.parse(clean)
+    console.log('Raw chains from Claude:', chains.length)
+  } catch(e) {
+    console.error('JSON parse error:', e, text.substring(0, 500))
+    return
+  }
+
+  // STEP 7: Validate and build chain objects
+  const usedSideAMarkets = new Set()
+  const usedSideBMarkets = new Set()
+
+  const validChains = chains
+    .map(chain => {
+      const sideAMarkets = (chain.sideA_indices || [])
+        .filter(i => Number.isInteger(i) && i >= 0 && i < finalSet.length)
+        .map(i => finalSet[i])
+        .filter(Boolean)
+
+      const sideBMarkets = (chain.sideB_indices || [])
+        .filter(i => Number.isInteger(i) && i >= 0 && i < finalSet.length)
+        .map(i => finalSet[i])
+        .filter(Boolean)
+
+      if (sideAMarkets.length < 2 || sideBMarkets.length < 2) return null
+
+      const sideAText = sideAMarkets.map(m => m.question.toLowerCase()).join(' ')
+      const sideBText = sideBMarkets.map(m => m.question.toLowerCase()).join(' ')
+      const allText = sideAText + ' ' + sideBText
+
+      // Reject same category
+      const sideACat = chain.sideA_category || ''
+      const sideBCat = chain.sideB_category || ''
+      if (sideACat && sideBCat && sideACat === sideBCat) {
+        console.log('Rejected same category:', chain.theme)
+        return null
+      }
+
+      // Hard reject invalid pairs regardless of what Claude says
+      const invalidPairs = [
+        // conflict + crypto = too indirect
+        { a: ['iran','invade','military','ceasefire','war'], 
+          b: ['bitcoin','ethereum','crypto','xrp'] },
+        // energy + crypto = too indirect  
+        { a: ['crude oil','oil price','brent'],
+          b: ['bitcoin','ethereum','crypto'] },
+        // sports noise
+        { a: [' vs ',' vs. ','win on 2026'], b: [] },
+        { a: [], b: [' vs ',' vs. ','win on 2026'] }
+      ]
+
+      for (const pair of invalidPairs) {
+        const aMatch = pair.a.length === 0 || pair.a.some(kw => sideAText.includes(kw))
+        const bMatch = pair.b.length === 0 || pair.b.some(kw => sideBText.includes(kw))
+        if (aMatch && bMatch && pair.a.length > 0 && pair.b.length > 0) {
+          console.log('Rejected invalid pair:', chain.theme)
+          return null
+        }
+        // Sports check
+        if (pair.a.includes(' vs ') && allText.includes(' vs ')) {
+          console.log('Rejected sports:', chain.theme)
+          return null
+        }
+      }
+
+      const allMkts = [...sideAMarkets, ...sideBMarkets]
+      const totalVol = allMkts.reduce((s, m) =>
+        s + parseFloat(m.volume24hr || 0), 0)
+      const movedMarkets = allMkts.filter(m =>
+        Math.abs(parseFloat(m.priceChange24h || 0)) > 0.03)
+
+      return {
+        theme: chain.theme,
+        emoji: chain.emoji || '🔗',
+        description: chain.description,
+        sideA: { label: chain.sideA_label, markets: sideAMarkets },
+        sideB: { label: chain.sideB_label, markets: sideBMarkets },
+        totalVol,
+        movedCount: movedMarkets.length,
+        hasMovement: movedMarkets.length > 0
+      }
+    })
+    .filter(Boolean)
+    // Deduplicate by market overlap
+    .filter((c, i, arr) => {
+      const sideAIds = c.sideA.markets.map(m => m.conditionId).sort().join(',')
+      const firstIdx = arr.findIndex(x =>
+        x.sideA.markets.map(m => m.conditionId).sort().join(',') === sideAIds
+      )
+      return firstIdx === i
+    })
+    // Prevent same markets dominating all chains
+    .filter(chain => {
+      const sideAIds = chain.sideA.markets.map(m => m.conditionId)
+      const sideBIds = chain.sideB.markets.map(m => m.conditionId)
+      const sideAOverlap = sideAIds.filter(id => usedSideAMarkets.has(id)).length
+      const sideBOverlap = sideBIds.filter(id => usedSideBMarkets.has(id)).length
+      if (sideAOverlap > sideAIds.length * 0.6) return false
+      if (sideBOverlap > sideBIds.length * 0.6) return false
+      sideAIds.forEach(id => usedSideAMarkets.add(id))
+      sideBIds.forEach(id => usedSideBMarkets.add(id))
+      return true
+    })
+    .sort((a, b) => b.totalVol - a.totalVol)
+    .slice(0, 20)
+
+  console.log('Final valid chains:', validChains.length)
+  renderChains(validChains)
+}
+```
+
+**Do not change volume spikes, spread scanner, proxy routes, rendering, or trade buttons.**

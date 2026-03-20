@@ -31,10 +31,10 @@ export function SpreadScannerTab({ spreads, isLoading, isRefreshing, onRefresh }
       <div className="flex flex-col items-center justify-center py-32 space-y-4 animate-in fade-in duration-300">
         <Loader2 className="h-10 w-10 animate-spin text-primary/60" />
         <p className="text-muted-foreground font-mono text-sm animate-pulse">
-          Fetching live CLOB orderbooks...
+          Scanning 200 active markets for spreads...
         </p>
         <p className="text-xs text-muted-foreground/60 font-mono">
-          Querying top 30 markets in parallel
+          Filtering bid 5–95¢ · spread &gt; 2¢ · vol &gt; $2K
         </p>
       </div>
     );
@@ -50,7 +50,7 @@ export function SpreadScannerTab({ spreads, isLoading, isRefreshing, onRefresh }
             Live Spread Scanner
           </h3>
           <p className="text-sm text-muted-foreground mt-0.5">
-            {spreads.length} markets with real bid/ask from live CLOB orderbook — spread &gt; 2¢, bid 5–95¢, vol &gt; $5K
+            {spreads.length} markets with spread &gt; 2¢, bid 5–95¢, vol &gt; $2K — sorted widest first
           </p>
         </div>
         <Button variant="outline" size="sm" onClick={onRefresh} disabled={isRefreshing}>
@@ -76,7 +76,7 @@ export function SpreadScannerTab({ spreads, isLoading, isRefreshing, onRefresh }
               {spreads.length === 0 && (
                 <tr>
                   <td colSpan={6} className="px-6 py-12 text-center text-muted-foreground">
-                    No markets with spread &gt; 2¢ in current top 30 by volume.
+                    No markets with spread &gt; 2¢ found across 200 active markets.
                   </td>
                 </tr>
               )}

@@ -35,11 +35,12 @@ router.get("/polymarket/events", async (req, res) => {
 
 router.get("/polymarket/markets", async (req, res) => {
   const limit = req.query.limit ?? 100;
+  const offset = req.query.offset ?? 0;
   const active = req.query.active ?? "true";
   const closed = req.query.closed ?? "false";
   const order = req.query.order ?? "volume24hr";
   const ascending = req.query.ascending ?? "false";
-  await proxyGet(`${GAMMA_BASE}/markets?limit=${limit}&active=${active}&closed=${closed}&order=${order}&ascending=${ascending}`, res);
+  await proxyGet(`${GAMMA_BASE}/markets?limit=${limit}&offset=${offset}&active=${active}&closed=${closed}&order=${order}&ascending=${ascending}`, res);
 });
 
 router.get("/polymarket/book", async (req, res) => {

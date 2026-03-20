@@ -1,0 +1,156 @@
+Tell your agent exactly this:
+
+---
+
+**Problem 1 — Event Groups showing garbage (VCU vs UNC with 30 sub-markets):**
+
+The filter isn't working because sports games generate dozens of micro-markets (spread lines, over/unders at every half-point) that all share the same event. These are useless for our intelligence layer.
+
+Fix the filter with ALL of these conditions:
+
+```javascript
+const isValuableGroup = (event) => {
+  const markets = event.markets
+  if (!markets || markets.length < 2) return false
+
+  // FILTER 1: Skip pure sports game events
+  // Sports games generate O/U and spread micro-markets we don't want
+  const sportsMicroMarkets = markets.filter(m =>
+    m.question.toLowerCase().includes('o/u') ||
+    m.question.toLowerCase().includes('over/under') ||
+    m.question.toLowerCase().includes('-0.5') ||
+    m.question.toLowerCase().includes('-1.5') ||
+    m.question.toLowerCase().includes('-2.5') ||
+    m.question.toLowerCase().includes('spread:')
+  )
+  // If more than 30% of markets are sports micro-markets, skip
+  if (sportsMicroMarkets.length / markets.length > 0.3) return false
+
+  // FILTER 2: Skip pure winner markets
+  const allWinnerMarkets = markets.every(m =>
+    m.question.toLowerCase().includes('win the') ||
+    m.question.toLowerCase().includes('finish 1st') ||
+    m.question.toLowerCase().includes('win the championship') ||
+    m.question.toLowerCase().includes('win the series')
+  )
+  if (allWinnerMarkets) return false
+
+  // FILTER 3: Must have markets asking genuinely different question types
+  const questionTypes = new Set(markets.map(m => {
+    const q = m.question.toLowerCase()
+    if (q.includes('will') && q.includes('win')) return 'winner'
+    if (q.includes('how many')) return 'quantity'
+    if (q.includes('price') || q.includes('rate')) return 'price'
+    if (q.includes('pass') || q.includes('sign') || q.includes('approve')) return 'policy'
+    if (q.includes('when') || q.includes('by ')) return 'timing'
+    return 'outcome'
+  }))
+  // Need at least 2 different question types in the group
+  if (questionTypes.size < 2) return false
+
+  // FILTER 4: At least 2 markets must be genuinely uncertain (10-90% range)
+  const uncertainMarkets = markets.filter(m => {
+    try {
+      const prices = JSON.parse(m.outcomePrices || '["0.5","0.5"]')
+      const yes = parseFloat(prices[0])
+      return yes > 0.10 && yes < 0.90
+    } catch { return false }
+  })
+  if (uncertainMarkets.length < 2) return false
+
+  // FILTER 5: Total group volume must be meaningful
+  const totalVol = markets.reduce((sum, m) =>
+    sum + parseFloat(m.volume24hr || 0), 0)
+  if (totalVol < 50000) return false
+
+  // FILTER 6: Skip if event title looks like a single game
+  const eventTitle = (event.title || '').toLowerCase()
+  const isSingleGame = 
+    eventTitle.includes(' vs ') ||
+    eventTitle.includes(' vs. ') ||
+    eventTitle.includes(' @ ')
+  if (isSingleGame) return false
+
+  return true
+}
+```
+
+Good groups this will surface: US Midterms 2026, Trump policy events, Fed rate decisions, geopolitical events — things with multiple logically connected markets asking different question types.
+
+---
+
+**Problem 2 — Spread Scanner showing 0 markets:**
+
+Two separate bugs:
+
+**Bug A — clobTokenIds is a JSON string not an array:**
+```javascript
+// WRONG — this is what your code is doing:
+const tokenId = market.clobTokenIds[0]  // returns "[" character
+
+// CORRECT:
+const tokenId = JSON.parse(market.clobTokenIds)[0]
+```
+
+**Bug B — CLOB orderbook response structure:**
+The CLOB API returns bids and asks sorted differently than expected. Parse it like this:
+```javascript
+const fetchSpread = async (market) => {
+  try {
+    const tokenId = JSON.parse(market.clobTokenIds)[0]
+    const res = await fetch(`${PROXY}/clob/book?token_id=${tokenId}`)
+    const book = await res.json()
+    
+    // bids are sorted descending (highest first)
+    // asks are sorted ascending (lowest first)
+    const bestBid = book.bids && book.bids.length > 0 
+      ? parseFloat(book.bids[0].price) : null
+    const bestAsk = book.asks && book.asks.length > 0 
+      ? parseFloat(book.asks[0].price) : null
+    
+    if (!bestBid || !bestAsk) return null
+    if (bestBid < 0.05 || bestAsk > 0.95) return null
+    
+    return {
+      market: market.question,
+      slug: market.slug,
+      bestBid,
+      bestAsk,
+      spread: bestAsk - bestBid,
+      volume24hr: parseFloat(market.volume24hr || 0)
+    }
+  } catch { return null }
+}
+```
+
+**Bug C — the top 30 by volume are huge liquid markets with tiny spreads:**
+High volume = tight spreads = boring for the scanner. Instead fetch markets sorted by volume but in the MID range — not the top 30 most liquid. Use this endpoint:
+```
+https://gamma-api.polymarket.com/markets?active=true&closed=false&limit=100&order=volume24hr&ascending=false&offset=20
+```
+Skip the top 20 most liquid (they'll have 1-2 cent spreads) and scan markets ranked 20-120 by volume. These have enough liquidity to trade but wide enough spreads to be interesting.
+
+**Then filter results:**
+```javascript
+const results = spreadData
+  .filter(d => d !== null)
+  .filter(d => d.spread > 0.02)
+  .filter(d => d.volume24hr > 2000)  // lowered from 5000
+  .filter(d => d.bestBid > 0.05 && d.bestAsk < 0.95)
+  .sort((a, b) => b.spread - a.spread)
+```
+
+**Also make sure your Express proxy is correctly forwarding the CLOB endpoint.** Add this route explicitly:
+```javascript
+app.get('/clob/book', async (req, res) => {
+  const tokenId = req.query.token_id
+  const response = await fetch(
+    `https://clob.polymarket.com/book?token_id=${tokenId}`,
+    { headers: { 'Accept': 'application/json' } }
+  )
+  const data = await response.json()
+  res.json(data)
+})
+```
+
+The `Accept: application/json` header is required — without it the CLOB API returns an empty response which is why you're getting 0 markets.

@@ -19,32 +19,55 @@ function getYesPrice(market: GammaMarket): number {
   return market.lastTradePrice ?? 0;
 }
 
-function getQuestionType(q: string): string {
-  const lower = q.toLowerCase();
-  if (/\bspread\b|\bover\/under\b|\bo\/u\b|\bfirst half\b|\btotal points\b/.test(lower)) return "spread";
-  if (/\bhow many\b|\bhow much\b|\bwhat will\b/.test(lower)) return "quantity";
-  if (/\bprice\b|\brate\b|\bindex\b/.test(lower)) return "price";
-  if (/\bwin the\b|\bwins the\b|\bfinish 1st\b|\bwin championship\b|\bwin [a-z]+ title\b/.test(lower)) return "winner";
-  return "outcome";
-}
-
 function isValuableGroup(event: GammaEvent): boolean {
   const markets = (event.markets || []).filter(m => m.active !== false && m.closed !== true);
-  if (markets.length < 2) return false;
+  if (!markets || markets.length < 2) return false;
 
-  const questionTypes = markets.map(m => getQuestionType(m.question || ""));
-  const uniqueTypes = new Set(questionTypes);
-
-  if (uniqueTypes.size === 1 && uniqueTypes.has("winner")) return false;
-
-  const hasUncertain = markets.some(m => {
-    const p = getYesPrice(m);
-    return p > 0.10 && p < 0.90;
+  // Filter 1: Skip events dominated by sports micro-markets (spreads, O/U lines)
+  const sportsMicro = markets.filter(m => {
+    const q = m.question?.toLowerCase() ?? "";
+    return (
+      q.includes("o/u") ||
+      q.includes("over/under") ||
+      q.includes("-0.5") ||
+      q.includes("-1.5") ||
+      q.includes("-2.5") ||
+      q.includes("spread:")
+    );
   });
+  if (sportsMicro.length / markets.length > 0.3) return false;
 
+  // Filter 2: Skip pure winner markets
+  const allWinner = markets.every(m => {
+    const q = m.question?.toLowerCase() ?? "";
+    return (
+      q.includes("win the") ||
+      q.includes("finish 1st") ||
+      q.includes("win the championship") ||
+      q.includes("win the series")
+    );
+  });
+  if (allWinner) return false;
+
+  // Filter 3: At least 2 genuinely uncertain markets (10–90%)
+  const uncertainCount = markets.filter(m => {
+    try {
+      const prices = JSON.parse(m.outcomePrices || '["0.5","0.5"]');
+      const yes = parseFloat(prices[0]);
+      return yes > 0.10 && yes < 0.90;
+    } catch { return false; }
+  }).length;
+  if (uncertainCount < 2) return false;
+
+  // Filter 4: Meaningful group volume
   const totalVol = markets.reduce((s, m) => s + parseFloat((m.volume24hr as any) || 0), 0);
+  if (totalVol < 50000) return false;
 
-  return hasUncertain && totalVol > 10000;
+  // Filter 5: Skip single-game events (they're already obvious on Polymarket)
+  const title = (event.title ?? "").toLowerCase();
+  if (title.includes(" vs ") || title.includes(" vs. ") || title.includes(" @ ")) return false;
+
+  return true;
 }
 
 

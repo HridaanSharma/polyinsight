@@ -1,0 +1,41 @@
+No, these spikes are not valid. Here's why:
+
+**Tom Steyer California Governor** — 161 days old, $502K total volume, $201K today. That's suspicious but look at the probability: 8.7%. Nobody serious is betting on Tom Steyer to win California governor. This is likely a single whale placing a large order on a long-shot market, not genuine informed activity.
+
+**Miguel Roca La Paz mayoral election** — 72 days old, $531K total volume, $208K today. Same problem — 8.3% probability, obscure local election. Almost certainly one person placing a big bet.
+
+**The core problem with your spike detection:** You're measuring volume spike but not filtering for markets where the spike actually means something. A real "someone knows something" spike looks like:
+
+- Market probability MOVES significantly alongside the volume spike — price goes from 30% to 50% on the same day volume spikes
+- The market is about something where insider information is plausible — politics, Fed decisions, geopolitical events
+- Multiple wallets are trading, not just one large order
+
+Tell your agent:
+
+```javascript
+// A valid spike needs BOTH volume AND price movement
+const isValidSpike = (m) => {
+  const prob = parseFloat(JSON.parse(m.outcomePrices)[0])
+  const priceChange = Math.abs(parseFloat(m.priceChange24h || 0))
+  const vol24 = parseFloat(m.volume24hr)
+  
+  // Must have meaningful price movement alongside volume
+  // If volume spikes but price doesn't move = one whale, not informed trading
+  if (priceChange < 0.03) return false  // price must move 3%+ same day
+  
+  // Must be genuinely uncertain market
+  if (prob < 0.08 || prob > 0.88) return false
+  
+  // Skip local/obscure elections — no insider info possible
+  const q = m.question.toLowerCase()
+  const isObscure = [
+    'la paz', 'mayoral', 'municipal', 'provincial',
+    'steyer', 'local election', 'city council'
+  ].some(kw => q.includes(kw))
+  if (isObscure) return false
+
+  return true
+}
+```
+
+This way you only show spikes where both volume AND price moved together — that's the real signal that someone knows something.

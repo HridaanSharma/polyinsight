@@ -1,5 +1,5 @@
 import React, { useMemo } from "react"
-import { AlertTriangle, TrendingUp, ExternalLink } from "lucide-react"
+import { AlertTriangle, TrendingUp, TrendingDown, ExternalLink } from "lucide-react"
 import { motion } from "framer-motion"
 import { GammaMarket } from "@/hooks/use-polymarket"
 import { Card, CardContent } from "@/components/ui/card"
@@ -15,35 +15,43 @@ interface SpikeData {
   score: number;
   daysAlive: number;
   tradeUrl: string;
+  priceChange: number;
+  prob: number;
 }
 
+// Sports / entertainment markets — volume doesn't carry information signal
 const SKIP_KEYWORDS = [
-  " vs ",
-  " vs. ",
-  " @ ",
-  "tweets",
-  "tweet",
-  "o/u ",
-  "over/under",
-  "win on 2026",
-  "win on 2025",
-  "drivers champion",
-  "eurovision",
-  "ncaa tournament",
-  "-0.5",
-  "-1.5",
-  "-2.5",
-  "super bowl",
-  "stanley cup",
-  "world series",
-  "nba finals",
-  "march madness",
+  " vs ", " vs. ", " @ ", "tweets", "tweet",
+  "o/u ", "over/under", "win on 2026", "win on 2025",
+  "drivers champion", "eurovision", "ncaa tournament",
+  "-0.5", "-1.5", "-2.5",
+  "super bowl", "stanley cup", "world series", "nba finals", "march madness",
+];
+
+// Local/obscure elections — no insider info is plausible, single whale = spike
+const OBSCURE_KEYWORDS = [
+  "la paz", "mayoral", "municipal", "provincial",
+  "steyer", "city council", "local election",
+  "parish", "borough", "alderman", "aldermanic",
+  "ward election", "school board",
 ];
 
 function getTradeUrl(m: GammaMarket): string {
   const eventSlug = m.events?.[0]?.slug;
   if (eventSlug) return "https://polymarket.com/event/" + eventSlug;
   return "https://polymarket.com/event/" + m.slug;
+}
+
+function getPriceChange(m: GammaMarket): number {
+  return parseFloat((m.oneDayPriceChange ?? m.priceChange ?? 0) as any) || 0;
+}
+
+function getProb(m: GammaMarket): number {
+  try {
+    const parsed = JSON.parse(m.outcomePrices || "[]");
+    if (parsed.length > 0) return parseFloat(parsed[0]);
+  } catch {}
+  return m.lastTradePrice || 0.5;
 }
 
 export function VolumeSpikesTab({ markets }: VolumeSpikesTabProps) {
@@ -54,15 +62,21 @@ export function VolumeSpikesTab({ markets }: VolumeSpikesTabProps) {
       if (m.active === false || m.closed === true) continue;
 
       const q = (m.question || "").toLowerCase();
+
+      // Skip sports / entertainment
       if (SKIP_KEYWORDS.some(kw => q.includes(kw))) continue;
 
+      // Skip obscure local elections — can't have informed trading
+      if (OBSCURE_KEYWORDS.some(kw => q.includes(kw))) continue;
+
       // Genuine uncertainty: 8–88%
-      let prob = 0.5;
-      try {
-        const parsed = JSON.parse(m.outcomePrices || "[]");
-        if (parsed.length > 0) prob = parseFloat(parsed[0]);
-      } catch {}
+      const prob = getProb(m);
       if (prob < 0.08 || prob > 0.88) continue;
+
+      // ── Key new gate: price must move ≥3% alongside volume ──────────────────
+      // Volume without price movement = single large order, not informed trading
+      const priceChange = getPriceChange(m);
+      if (Math.abs(priceChange) < 0.03) continue;
 
       const vol24 = parseFloat(m.volume24hr as any) || 0;
       const volTotal = parseFloat((m.volumeClob || m.volume || 0) as any) || 0;
@@ -83,7 +97,7 @@ export function VolumeSpikesTab({ markets }: VolumeSpikesTabProps) {
       const score = vol24 / avgDaily;
       if (score < 4) continue;
 
-      results.push({ market: m, score, daysAlive: daysOld, tradeUrl: getTradeUrl(m) });
+      results.push({ market: m, score, daysAlive: daysOld, tradeUrl: getTradeUrl(m), priceChange, prob });
     }
 
     return results.sort((a, b) => b.score - a.score).slice(0, 15);
@@ -99,7 +113,8 @@ export function VolumeSpikesTab({ markets }: VolumeSpikesTabProps) {
         <div>
           <h3 className="font-bold text-lg leading-none mb-1">Unusual Activity Detected</h3>
           <p className="text-sm text-red-400/80">
-            Markets where 24h vol is 4× their historical daily average. Min $200K today, established markets only.
+            Markets where 24h volume is 4× their daily average AND price moved ≥3% — both signals together
+            suggest informed trading, not a single whale.
           </p>
         </div>
       </div>
@@ -107,19 +122,16 @@ export function VolumeSpikesTab({ markets }: VolumeSpikesTabProps) {
       {spikedMarkets.length === 0 ? (
         <div className="text-center py-12 text-muted-foreground flex flex-col items-center">
           <TrendingUp size={48} className="mb-4 opacity-20" />
-          <p>No unusual volume spikes detected right now.</p>
+          <p>No genuine volume spikes detected right now.</p>
           <p className="text-xs mt-2 text-muted-foreground/60">
-            Requires 4× spike, $200K/24h, market age &gt;7 days, and 8–88% probability.
+            Requires 4× spike, $200K/24h, ≥3% price move, market age &gt;7 days, and 8–88% probability.
           </p>
         </div>
       ) : (
         <div className="grid gap-4">
-          {spikedMarkets.map(({ market, score, daysAlive, tradeUrl }, i) => {
-            let prob = market.lastTradePrice || 0;
-            try {
-              const parsed = JSON.parse(market.outcomePrices || "[]");
-              if (parsed.length > 0) prob = parseFloat(parsed[0]);
-            } catch {}
+          {spikedMarkets.map(({ market, score, daysAlive, tradeUrl, priceChange, prob }, i) => {
+            const pctChange = priceChange * 100;
+            const isUp = pctChange > 0;
 
             return (
               <motion.div
@@ -136,6 +148,19 @@ export function VolumeSpikesTab({ markets }: VolumeSpikesTabProps) {
                         <Badge variant="destructive" className="animate-pulse">
                           🚨 {score.toFixed(1)}× spike
                         </Badge>
+                        <span
+                          className={`inline-flex items-center gap-1 text-xs font-bold px-2 py-1 rounded ${
+                            isUp
+                              ? "bg-green-500/15 text-green-400 border border-green-500/25"
+                              : "bg-red-500/15 text-red-400 border border-red-500/25"
+                          }`}
+                        >
+                          {isUp
+                            ? <TrendingUp className="w-3 h-3" />
+                            : <TrendingDown className="w-3 h-3" />
+                          }
+                          {isUp ? "+" : ""}{pctChange.toFixed(1)}% today
+                        </span>
                         <span className="text-xs text-muted-foreground bg-secondary px-2 py-1 rounded">
                           {Math.floor(daysAlive)}d old
                         </span>

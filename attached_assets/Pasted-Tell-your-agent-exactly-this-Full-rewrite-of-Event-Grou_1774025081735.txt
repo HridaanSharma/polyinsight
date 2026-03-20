@@ -1,0 +1,232 @@
+Tell your agent exactly this:
+
+---
+
+**Full rewrite of Event Groups — more chains, real data, better display:**
+
+**Step 1 — fetch more markets:**
+```javascript
+// Fetch 500 markets sorted by volume
+const res = await fetch('/proxy/gamma/markets?active=true&closed=false&limit=500&order=volume24hr&ascending=false')
+const all = await res.json()
+
+// Filter meaningful only
+const markets = all.filter(m => {
+  try {
+    const yes = parseFloat(JSON.parse(m.outcomePrices)[0])
+    return yes > 0.04 && yes < 0.96 &&
+      parseFloat(m.volume24hr) > 5000 &&
+      m.active === true && m.closed === false
+  } catch { return false }
+})
+```
+
+**Step 2 — expand to 10 causal chains:**
+```javascript
+const CAUSAL_CHAINS = [
+  {
+    theme: "US Invades Iran → Oil Spikes",
+    emoji: "⚡",
+    description: "If US enters Iran, oil through Hormuz gets disrupted. Betting one without the other is incomplete.",
+    sideA: { label: "IRAN CONFLICT", keywords: ["iran", "invade iran", "us forces enter", "hormuz", "kharg"] },
+    sideB: { label: "OIL PRICES", keywords: ["crude oil", "brent oil", "oil price", "wti"] }
+  },
+  {
+    theme: "Fed Holds Rates → Recession Risk",
+    emoji: "🏦",
+    description: "If Fed keeps rates high, recession and unemployment odds should rise. Check if they have.",
+    sideA: { label: "FED DECISIONS", keywords: ["federal reserve", "fed rate", "interest rate", "bps after", "fomc"] },
+    sideB: { label: "ECONOMIC IMPACT", keywords: ["recession", "unemployment", "gdp", "s&p 500", "stock market crash"] }
+  },
+  {
+    theme: "Trump Tariffs → China GDP Falls",
+    emoji: "🌏",
+    description: "Trump tariffs on China directly pressure Chinese economic growth. These markets should move together.",
+    sideA: { label: "TRUMP TRADE POLICY", keywords: ["tariff", "trade war", "trump china", "trump trade"] },
+    sideB: { label: "CHINA ECONOMY", keywords: ["china gdp", "china economy", "chinese economy", "yuan"] }
+  },
+  {
+    theme: "Democrats Win Senate → Policy Passes",
+    emoji: "🏛️",
+    description: "Senate control is the bottleneck for every major bill. If Dem odds move, policy markets should follow.",
+    sideA: { label: "SENATE CONTROL", keywords: ["democrats win senate", "republican senate", "senate majority", "midterm senate"] },
+    sideB: { label: "POLICY OUTCOMES", keywords: ["climate bill", "immigration bill", "minimum wage", "student loan", "healthcare bill"] }
+  },
+  {
+    theme: "Iranian Regime Falls → Israel & Oil Reshuffled",
+    emoji: "🕊️",
+    description: "Regime collapse changes the entire Middle East balance — Netanyahu, oil, and regional conflict all reprice.",
+    sideA: { label: "REGIME CHANGE", keywords: ["iranian regime fall", "iran leadership change", "iran government"] },
+    sideB: { label: "REGIONAL IMPACT", keywords: ["netanyahu", "israel", "crude oil", "saudi", "lebanon"] }
+  },
+  {
+    theme: "Bitcoin Crashes → Crypto Regulation Hardens",
+    emoji: "₿",
+    description: "A BTC crash historically triggers regulatory crackdown. Check if regulation markets have priced this in.",
+    sideA: { label: "BTC PRICE", keywords: ["bitcoin dip", "bitcoin below", "bitcoin crash", "bitcoin drop"] },
+    sideB: { label: "CRYPTO REGULATION", keywords: ["crypto regulation", "bitcoin etf", "sec crypto", "coinbase", "crypto ban"] }
+  },
+  {
+    theme: "AI Breakthrough → Nvidia & Tech Stocks Spike",
+    emoji: "🤖",
+    description: "Major AI model releases historically move Nvidia and tech valuations. Are these markets in sync?",
+    sideA: { label: "AI MILESTONES", keywords: ["agi", "openai", "anthropic", "gpt-5", "gemini", "ai model release"] },
+    sideB: { label: "TECH MARKET", keywords: ["nvidia", "s&p 500", "nasdaq", "tech stock", "microsoft stock", "apple stock"] }
+  },
+  {
+    theme: "Russia-Ukraine Ceasefire → Energy Prices Drop",
+    emoji: "🇺🇦",
+    description: "A ceasefire reopens gas pipelines and removes energy war premium. Oil and gas markets should reprice.",
+    sideA: { label: "WAR OUTCOME", keywords: ["ukraine ceasefire", "russia ukraine", "zelensky", "putin ukraine", "ukraine war ends"] },
+    sideB: { label: "ENERGY MARKETS", keywords: ["natural gas", "crude oil", "europe energy", "gas price", "oil price"] }
+  },
+  {
+    theme: "US Debt Ceiling Crisis → Dollar Weakens",
+    emoji: "💵",
+    description: "Debt ceiling fights historically weaken the dollar and spike gold. Check if currency markets reflect this.",
+    sideA: { label: "DEBT CEILING", keywords: ["debt ceiling", "us default", "government shutdown", "us debt"] },
+    sideB: { label: "CURRENCY / GOLD", keywords: ["dollar index", "gold price", "dxy", "usd", "gold above"] }
+  },
+  {
+    theme: "China Invades Taiwan → Semiconductor Crisis",
+    emoji: "🔧",
+    description: "Taiwan produces 90% of advanced chips. Invasion odds should be reflected in semiconductor markets.",
+    sideA: { label: "TAIWAN CONFLICT", keywords: ["china invade taiwan", "taiwan invasion", "taiwan strait", "china taiwan"] },
+    sideB: { label: "TECH / CHIPS", keywords: ["semiconductor", "nvidia", "tsmc", "chip shortage", "tech supply"] }
+  }
+]
+```
+
+**Step 3 — build chains with real matched markets:**
+```javascript
+const buildChain = (chain, markets) => {
+  const sideA = markets.filter(m => {
+    const q = m.question.toLowerCase()
+    return chain.sideA.keywords.some(kw => q.includes(kw))
+  }).slice(0, 6)
+
+  const sideB = markets.filter(m => {
+    const q = m.question.toLowerCase()
+    return chain.sideB.keywords.some(kw => q.includes(kw))
+  }).slice(0, 6)
+
+  // BOTH sides must have real markets — this is the whole point
+  if (sideA.length === 0 || sideB.length === 0) return null
+  
+  // Need at least 2 markets total across both sides
+  if (sideA.length + sideB.length < 3) return null
+
+  const allMarkets = [...sideA, ...sideB]
+  const totalVol = allMarkets.reduce((s, m) => 
+    s + parseFloat(m.volume24hr || 0), 0)
+
+  // Check if any market moved significantly in 24h
+  const movedMarkets = allMarkets.filter(m => 
+    Math.abs(parseFloat(m.priceChange24h || 0)) > 0.03
+  )
+
+  return {
+    ...chain,
+    sideA,
+    sideB,
+    totalVol,
+    hasMovement: movedMarkets.length > 0,
+    movedCount: movedMarkets.length
+  }
+}
+
+const chains = CAUSAL_CHAINS
+  .map(c => buildChain(c, markets))
+  .filter(Boolean)
+  .sort((a, b) => b.totalVol - a.totalVol) // highest vol chains first
+```
+
+**Step 4 — display with two-column layout:**
+```javascript
+chains.forEach(chain => {
+  const renderSide = (markets, label) => `
+    <div class="chain-side">
+      <div class="side-label">${label}</div>
+      ${markets.map(m => {
+        const yes = parseFloat(JSON.parse(m.outcomePrices)[0])
+        const change = parseFloat(m.priceChange24h || 0)
+        const moved = Math.abs(change) > 0.03
+        const url = m.url || `https://polymarket.com/event/${m.slug}`
+        return `
+          <div class="market-row ${moved ? 'moved' : ''}">
+            <span class="market-q">${m.question}</span>
+            <span class="market-prob">${(yes*100).toFixed(1)}%</span>
+            ${moved ? `<span class="moved-badge">${change > 0 ? '▲' : '▼'}${Math.abs(change*100).toFixed(1)}%</span>` : '<span class="no-change">—</span>'}
+            <a href="${url}" target="_blank" class="trade-btn">Trade</a>
+          </div>
+        `
+      }).join('')}
+    </div>
+  `
+
+  html += `
+    <div class="chain-card ${chain.hasMovement ? 'has-movement' : ''}">
+      <div class="chain-header">
+        <span>${chain.emoji} ${chain.theme}</span>
+        <span class="chain-vol">$${formatVol(chain.totalVol)} 24h vol</span>
+        ${chain.hasMovement ? `<span class="movement-alert">🔴 ${chain.movedCount} market${chain.movedCount > 1 ? 's' : ''} moved — check for repricing</span>` : ''}
+      </div>
+      <p class="chain-desc">${chain.description}</p>
+      <div class="chain-columns">
+        ${renderSide(chain.sideA, chain.sideA.label)}
+        <div class="chain-arrow">→</div>
+        ${renderSide(chain.sideB, chain.sideB.label)}
+      </div>
+    </div>
+  `
+})
+```
+
+---
+
+**Spread Scanner trade button fix — permanent fix:**
+
+```javascript
+// In the proxy server, add this route to get the real event URL
+app.get('/proxy/gamma/markets', async (req, res) => {
+  const params = new URLSearchParams(req.query)
+  const response = await fetch(
+    `https://gamma-api.polymarket.com/markets?${params}`,
+    { headers: { 'Accept': 'application/json', 'User-Agent': 'Mozilla/5.0' } }
+  )
+  const data = await response.json()
+  res.json(data)
+})
+
+// The Gamma API returns a field called 'url' on every market
+// It looks like: "https://polymarket.com/event/will-trump-visit-china/..."
+// Use this directly — don't construct the URL yourself
+
+// In your spread scanner frontend:
+const getUrl = (market) => {
+  // Option 1: direct url field from Gamma
+  if (market.url) return market.url
+  
+  // Option 2: construct from groupItemTitle slug + conditionId  
+  const slug = market.slug || market.conditionId
+  return `https://polymarket.com/event/${slug}`
+}
+
+// When rendering each spread row:
+`<a href="${getUrl(market)}" 
+   target="_blank" 
+   rel="noopener noreferrer"
+   class="trade-btn">
+   Trade ↗
+</a>`
+```
+
+Also add this one-time debug log so you can verify the URL field exists:
+```javascript
+console.log('Sample market URL fields:', {
+  url: markets[0]?.url,
+  slug: markets[0]?.slug,
+  conditionId: markets[0]?.conditionId
+})
+```
+Paste what that logs and we can fix the exact URL format if it's still 404ing.

@@ -84,62 +84,99 @@ function getTradeUrl(m: GammaMarket): string {
 }
 
 // ── Cross-category causal chain definitions ───────────────────────────────────
-// Each chain requires markets from BOTH group A and group B — that's the value:
-// they're from different parts of Polymarket but move together in real life.
+// Each chain requires markets from BOTH sides — the value is they're from
+// different parts of Polymarket but move together in real life.
+// Chains with no live markets on either side are automatically hidden.
 const CROSS_CHAINS = [
   {
-    theme: "If US Invades Iran → Oil Spikes",
-    description: "Traders betting on Iran conflict should also watch oil price markets",
+    theme: "US Invades Iran → Oil Spikes",
     emoji: "⚡",
-    groupALabel: "IRAN / CONFLICT",
+    description: "If US enters Iran, oil through Hormuz gets disrupted. Betting one without the other is incomplete.",
+    groupALabel: "IRAN CONFLICT",
     groupBLabel: "OIL PRICES",
-    keywordsA: ["us forces enter iran", "invade iran", "us attack iran", "iran x israel", "iran x us", "kharg", "hormuz"],
-    keywordsB: ["crude oil", "oil price", "oil hit", "brent"],
+    keywordsA: ["iran", "invade iran", "us forces enter", "hormuz", "kharg"],
+    keywordsB: ["crude oil", "brent oil", "oil price", "wti"],
   },
   {
-    theme: "Iranian Regime Falls → Regional Domino",
-    description: "Regime change cascades into oil stability, Israel, and Netanyahu odds",
+    theme: "Fed Holds Rates → Recession Risk",
+    emoji: "🏦",
+    description: "If Fed keeps rates high, recession and unemployment odds should rise. Check if they have.",
+    groupALabel: "FED DECISIONS",
+    groupBLabel: "ECONOMIC IMPACT",
+    keywordsA: ["federal reserve", "fed rate", "interest rate", "bps after", "fomc"],
+    keywordsB: ["recession", "unemployment", "gdp", "s&p 500", "stock market crash"],
+  },
+  {
+    theme: "Trump Tariffs → China GDP Falls",
+    emoji: "🌏",
+    description: "Trump tariffs on China directly pressure Chinese economic growth. These markets should move together.",
+    groupALabel: "TRUMP TRADE POLICY",
+    groupBLabel: "CHINA ECONOMY",
+    keywordsA: ["tariff", "trade war", "trump china", "trump trade"],
+    keywordsB: ["china gdp", "china economy", "chinese economy", "yuan"],
+  },
+  {
+    theme: "Democrats Win Senate → Policy Passes",
     emoji: "🏛️",
+    description: "Senate control is the bottleneck for every major bill. If Dem odds move, policy markets should follow.",
+    groupALabel: "SENATE CONTROL",
+    groupBLabel: "POLICY OUTCOMES",
+    keywordsA: ["democrats win senate", "republican senate", "senate majority", "midterm senate"],
+    keywordsB: ["climate bill", "immigration bill", "minimum wage", "student loan", "healthcare bill"],
+  },
+  {
+    theme: "Iranian Regime Falls → Israel & Oil Reshuffled",
+    emoji: "🕊️",
+    description: "Regime collapse changes the entire Middle East balance — Netanyahu, oil, and regional conflict all reprice.",
     groupALabel: "REGIME CHANGE",
     groupBLabel: "REGIONAL IMPACT",
-    keywordsA: ["iranian regime", "iran leadership change", "iran regime fall"],
-    keywordsB: ["netanyahu", "crude oil", "oil price", "oil hit", "israel launch", "israel ground"],
+    keywordsA: ["iranian regime fall", "iran leadership change", "iran government"],
+    keywordsB: ["netanyahu", "israel", "crude oil", "saudi", "lebanon"],
   },
   {
-    theme: "Fed Decision → S&P 500 Move",
-    description: "Rate decisions directly affect whether the S&P opens up or down",
-    emoji: "🏦",
-    groupALabel: "FED / RATES",
-    groupBLabel: "S&P 500",
-    keywordsA: ["fed interest rate", "fed rate", "rate cut", "rate hike", "bps after the"],
-    keywordsB: ["s&p 500", "s&p 500 (spx)"],
+    theme: "Bitcoin Crashes → Crypto Regulation Hardens",
+    emoji: "₿",
+    description: "A BTC crash historically triggers regulatory crackdown. Check if regulation markets have priced this in.",
+    groupALabel: "BTC PRICE",
+    groupBLabel: "CRYPTO REGULATION",
+    keywordsA: ["bitcoin dip", "bitcoin below", "bitcoin crash", "bitcoin drop"],
+    keywordsB: ["crypto regulation", "bitcoin etf", "sec crypto", "coinbase", "crypto ban"],
   },
   {
-    theme: "Ukraine Ceasefire → Iran Spotlight",
-    description: "If Ukraine settles, US military focus shifts fully to Iran",
-    emoji: "🕊️",
-    groupALabel: "UKRAINE / RUSSIA",
-    groupBLabel: "IRAN / US FORCES",
-    keywordsA: ["russia x ukraine ceasefire", "ukraine ceasefire", "russia x ukraine"],
-    keywordsB: ["us forces enter iran", "invade iran", "us attack iran", "iran x us"],
-  },
-  {
-    theme: "US Distracted by Iran → Taiwan Risk",
-    description: "If the US is fighting in Iran, China may read Taiwan as an opportunity",
-    emoji: "🌏",
-    groupALabel: "IRAN CONFLICT",
-    groupBLabel: "TAIWAN / CHINA",
-    keywordsA: ["us forces enter iran", "invade iran", "us attack iran", "kharg", "hormuz"],
-    keywordsB: ["china invade taiwan", "invade taiwan"],
-  },
-  {
-    theme: "OpenAI vs NVIDIA — Who Wins the AI Race?",
-    description: "Model leadership and hardware dominance are two sides of the same bet",
+    theme: "AI Breakthrough → Nvidia & Tech Stocks Spike",
     emoji: "🤖",
-    groupALabel: "AI MODELS",
-    groupBLabel: "AI HARDWARE",
-    keywordsA: ["openai", "anthropic", "best ai model", "gpt"],
-    keywordsB: ["nvidia", "largest company", "nvidia market cap"],
+    description: "Major AI model releases historically move Nvidia and tech valuations. Are these markets in sync?",
+    groupALabel: "AI MILESTONES",
+    groupBLabel: "TECH MARKET",
+    keywordsA: ["openai", "anthropic", "gpt-5", "gemini", "ai model release", "best ai model"],
+    keywordsB: ["nvidia", "s&p 500", "nasdaq", "tech stock", "microsoft stock", "apple stock"],
+  },
+  {
+    theme: "Russia-Ukraine Ceasefire → Energy Prices Drop",
+    emoji: "🇺🇦",
+    description: "A ceasefire reopens gas pipelines and removes energy war premium. Oil and gas markets should reprice.",
+    groupALabel: "WAR OUTCOME",
+    groupBLabel: "ENERGY MARKETS",
+    keywordsA: ["ukraine ceasefire", "russia ukraine", "zelensky", "putin ukraine", "ukraine war ends"],
+    keywordsB: ["natural gas", "crude oil", "europe energy", "gas price", "oil price"],
+  },
+  {
+    theme: "US Debt Ceiling Crisis → Dollar Weakens",
+    emoji: "💵",
+    description: "Debt ceiling fights historically weaken the dollar and spike gold. Check if currency markets reflect this.",
+    groupALabel: "DEBT CEILING",
+    groupBLabel: "CURRENCY / GOLD",
+    keywordsA: ["debt ceiling", "us default", "government shutdown", "us debt"],
+    keywordsB: ["dollar index", "gold price", "dxy", "gold above"],
+  },
+  {
+    theme: "China Invades Taiwan → Semiconductor Crisis",
+    emoji: "🔧",
+    description: "Taiwan produces 90% of advanced chips. Invasion odds should be reflected in semiconductor markets.",
+    groupALabel: "TAIWAN CONFLICT",
+    groupBLabel: "TECH / CHIPS",
+    keywordsA: ["china invade taiwan", "taiwan invasion", "taiwan strait", "china taiwan"],
+    keywordsB: ["semiconductor", "nvidia", "tsmc", "chip shortage", "tech supply"],
   },
 ] as const;
 
@@ -147,7 +184,7 @@ const CROSS_CHAINS = [
 function enrichMarket(m: GammaMarket): ChainMarket | null {
   try {
     const yes = parseFloat(JSON.parse(m.outcomePrices || '["0.5"]')[0]);
-    if (yes < 0.05 || yes > 0.95) return null;
+    if (yes <= 0.04 || yes >= 0.96) return null;
     if (parseFloat(m.volume24hr as any) < 5000) return null;
     const change = parseFloat((m.oneDayPriceChange ?? m.priceChange ?? 0) as any);
     return {
@@ -189,7 +226,7 @@ export function useCausalChains() {
   const { data: allMarkets = [], ...rest } = useAllMarkets();
 
   const chains: CrossChain[] = CROSS_CHAINS.map(def => {
-    const matchGroup = (keywords: readonly string[]) => {
+    const matchGroup = (keywords: readonly string[], limit = 6) => {
       const results: ChainMarket[] = [];
       const seen = new Set<string>();
       for (const m of allMarkets) {
@@ -201,7 +238,7 @@ export function useCausalChains() {
         if (!enriched) continue;
         seen.add(key);
         results.push(enriched);
-        if (results.length >= 5) break;
+        if (results.length >= limit) break;
       }
       return results;
     };
@@ -209,8 +246,10 @@ export function useCausalChains() {
     const groupA = matchGroup(def.keywordsA);
     const groupB = matchGroup(def.keywordsB);
 
-    // Both sides must have at least 1 market — that's the cross-category value
+    // Both sides must have at least 1 market — that's the whole cross-category value
     if (groupA.length === 0 || groupB.length === 0) return null;
+    // Need at least 3 markets total across both sides
+    if (groupA.length + groupB.length < 3) return null;
 
     const allMkts = [...groupA, ...groupB];
     const totalVolume = allMkts.reduce((s, m) => s + parseFloat((m.volume24hr || 0) as any), 0);
@@ -225,7 +264,9 @@ export function useCausalChains() {
       groupB,
       totalVolume,
     };
-  }).filter((c): c is CrossChain => c !== null);
+  })
+    .filter((c): c is CrossChain => c !== null)
+    .sort((a, b) => b.totalVolume - a.totalVolume); // highest volume chains first
 
   return { chains, ...rest };
 }

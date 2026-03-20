@@ -1,0 +1,177 @@
+The problem is clear — your hardcoded keywords are only finding Iran and Fed markets. The Claude API call isn't actually running to dynamically discover new chains.
+
+Tell your agent:
+
+---
+
+**Full rewrite — Claude discovers ALL chains dynamically from live Polymarket data:**
+
+```javascript
+// Step 1: Fetch ALL active markets
+const res = await fetch('/proxy/gamma/markets?active=true&closed=false&limit=500&order=volume24hr&ascending=false')
+const all = await res.json()
+
+// Step 2: Filter to meaningful markets only
+const meaningful = all.filter(m => {
+  try {
+    const yes = parseFloat(JSON.parse(m.outcomePrices)[0])
+    const vol24 = parseFloat(m.volume24hr || 0)
+    return yes > 0.05 && yes < 0.95 &&
+      vol24 > 10000 &&
+      m.active === true &&
+      m.closed === false
+  } catch { return false }
+})
+
+// Step 3: Take top 80 by volume — these are what matters
+const top80 = meaningful
+  .sort((a,b) => parseFloat(b.volume24hr) - parseFloat(a.volume24hr))
+  .slice(0, 80)
+
+// Step 4: Send ALL of them to Claude to find causal groups
+// Do NOT hardcode any chains — let Claude find them from real data
+const findChains = async (markets) => {
+  const marketList = markets.map((m, i) => {
+    const yes = parseFloat(JSON.parse(m.outcomePrices)[0])
+    const vol = parseFloat(m.volume24hr)
+    const change = parseFloat(m.priceChange24h || 0)
+    return `${i}. "${m.question}" | YES:${(yes*100).toFixed(1)}% | 24hVol:$${(vol/1000).toFixed(0)}K | change:${(change*100).toFixed(1)}%`
+  }).join('\n')
+
+  const response = await fetch('/proxy/claude', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 2000,
+      messages: [{
+        role: 'user',
+        content: `You are analyzing ALL currently active Polymarket prediction markets.
+
+Here are the top 80 markets by 24h volume right now:
+${marketList}
+
+Your job: find 6-8 groups of markets that are CAUSALLY CONNECTED across different topics.
+
+The key rule: markets in the same group must be from DIFFERENT topics/categories but logically linked — if one moves, the others SHOULD reprice too but might not have yet.
+
+Good examples of what we want:
+- "US invades Iran" (conflict) + "Oil hits $100" (commodities) — invasion disrupts oil supply
+- "Fed holds rates" (monetary) + "Recession by 2026" (economy) — high rates cause recession
+- "Democrats win Senate" (politics) + "Climate bill passes" (policy) — Senate controls legislation
+- "China invades Taiwan" (conflict) + "Nvidia stock drops" (tech) — Taiwan makes chips
+
+Bad examples — do NOT do these:
+- Grouping all Iran markets together — same topic
+- Grouping all Fed rate markets together — same topic  
+- Grouping all Bitcoin price targets together — same topic
+
+For each group:
+- sideA = the CAUSE markets (the thing that triggers)
+- sideB = the EFFECT markets (the thing that should reprice)
+- Use only indices from the list above
+- Each side needs 2-5 markets minimum
+- Groups must cross categories
+
+Return ONLY valid JSON array, absolutely no other text:
+[
+  {
+    "theme": "Cause → Effect (short, specific)",
+    "emoji": "relevant emoji",
+    "description": "One sentence: exactly why these markets move together",
+    "sideA_label": "CAUSE CATEGORY NAME",
+    "sideA_indices": [1, 4, 7],
+    "sideB_label": "EFFECT CATEGORY NAME",
+    "sideB_indices": [12, 23, 31]
+  }
+]`
+      }]
+    })
+  })
+
+  const data = await response.json()
+  
+  try {
+    const text = data.content[0].text.trim()
+    const clean = text.replace(/```json|```/g, '').trim()
+    const chains = JSON.parse(clean)
+    
+    // Convert indices back to real market objects
+    return chains.map(chain => {
+      const sideAMarkets = chain.sideA_indices
+        .filter(i => i >= 0 && i < markets.length)
+        .map(i => markets[i])
+        .filter(Boolean)
+      
+      const sideBMarkets = chain.sideB_indices
+        .filter(i => i >= 0 && i < markets.length)
+        .map(i => markets[i])
+        .filter(Boolean)
+
+      // Both sides must have real markets
+      if (sideAMarkets.length < 1 || sideBMarkets.length < 1) return null
+
+      const allMkts = [...sideAMarkets, ...sideBMarkets]
+      const totalVol = allMkts.reduce((s, m) => 
+        s + parseFloat(m.volume24hr || 0), 0)
+      
+      const movedMarkets = allMkts.filter(m =>
+        Math.abs(parseFloat(m.priceChange24h || 0)) > 0.03
+      )
+
+      return {
+        theme: chain.theme,
+        emoji: chain.emoji,
+        description: chain.description,
+        sideA: { label: chain.sideA_label, markets: sideAMarkets },
+        sideB: { label: chain.sideB_label, markets: sideBMarkets },
+        totalVol,
+        movedCount: movedMarkets.length,
+        hasMovement: movedMarkets.length > 0
+      }
+    }).filter(Boolean)
+  } catch(e) {
+    console.error('Claude parse error:', e)
+    return []
+  }
+}
+
+// Step 5: Run it — NO hardcoded chains at all
+const chains = await findChains(top80)
+chains.sort((a,b) => b.totalVol - a.totalVol)
+```
+
+**Remove ALL of this — delete it completely:**
+```javascript
+// DELETE the entire CAUSAL_CHAINS array
+// DELETE buildChain function  
+// DELETE any hardcoded keywords
+// DELETE any hardcoded market names
+// Claude finds everything dynamically from real live data
+```
+
+**Step 6 — render with correct trade URLs:**
+```javascript
+// Build event URL map first
+const eventsRes = await fetch('/proxy/gamma/events?active=true&closed=false&limit=500')
+const events = await eventsRes.json()
+
+const urlMap = {}
+events.forEach(event => {
+  if (event.markets) {
+    event.markets.forEach(m => {
+      urlMap[m.conditionId] = event.url || 
+        `https://polymarket.com/event/${event.slug}`
+    })
+  }
+})
+
+// Use in render:
+const getUrl = (market) => {
+  return urlMap[market.conditionId] || 
+    market.url || 
+    `https://polymarket.com/event/${market.slug}`
+}
+```
+
+This way every time someone opens your dashboard it fetches whatever is live on Polymarket right now, sends it to Claude, Claude finds the real causal relationships in today's actual markets, and displays them. Zero hardcoding. Fully dynamic. Works on any market Polymarket lists.

@@ -84,103 +84,6 @@ function getTradeUrl(m: GammaMarket): string {
   return `https://polymarket.com/event/${m.slug}`;
 }
 
-// ── Cross-category causal chain definitions ───────────────────────────────────
-// Each chain requires markets from BOTH sides — the value is they're from
-// different parts of Polymarket but move together in real life.
-// Chains with no live markets on either side are automatically hidden.
-const CROSS_CHAINS = [
-  {
-    theme: "US Invades Iran → Oil Spikes",
-    emoji: "⚡",
-    description: "If US enters Iran, oil through Hormuz gets disrupted. Betting one without the other is incomplete.",
-    groupALabel: "IRAN CONFLICT",
-    groupBLabel: "OIL PRICES",
-    keywordsA: ["iran", "invade iran", "us forces enter", "hormuz", "kharg"],
-    keywordsB: ["crude oil", "brent oil", "oil price", "wti"],
-  },
-  {
-    theme: "Fed Holds Rates → Recession Risk",
-    emoji: "🏦",
-    description: "If Fed keeps rates high, recession and unemployment odds should rise. Check if they have.",
-    groupALabel: "FED DECISIONS",
-    groupBLabel: "ECONOMIC IMPACT",
-    keywordsA: ["federal reserve", "fed rate", "interest rate", "bps after", "fomc"],
-    keywordsB: ["recession", "unemployment", "gdp", "s&p 500", "stock market crash"],
-  },
-  {
-    theme: "Trump Tariffs → China GDP Falls",
-    emoji: "🌏",
-    description: "Trump tariffs on China directly pressure Chinese economic growth. These markets should move together.",
-    groupALabel: "TRUMP TRADE POLICY",
-    groupBLabel: "CHINA ECONOMY",
-    keywordsA: ["tariff", "trade war", "trump china", "trump trade"],
-    keywordsB: ["china gdp", "china economy", "chinese economy", "yuan"],
-  },
-  {
-    theme: "Democrats Win Senate → Policy Passes",
-    emoji: "🏛️",
-    description: "Senate control is the bottleneck for every major bill. If Dem odds move, policy markets should follow.",
-    groupALabel: "SENATE CONTROL",
-    groupBLabel: "POLICY OUTCOMES",
-    keywordsA: ["democrats win senate", "republican senate", "senate majority", "midterm senate"],
-    keywordsB: ["climate bill", "immigration bill", "minimum wage", "student loan", "healthcare bill"],
-  },
-  {
-    theme: "Iranian Regime Falls → Israel & Oil Reshuffled",
-    emoji: "🕊️",
-    description: "Regime collapse changes the entire Middle East balance — Netanyahu, oil, and regional conflict all reprice.",
-    groupALabel: "REGIME CHANGE",
-    groupBLabel: "REGIONAL IMPACT",
-    keywordsA: ["iranian regime fall", "iran leadership change", "iran government"],
-    keywordsB: ["netanyahu", "israel", "crude oil", "saudi", "lebanon"],
-  },
-  {
-    theme: "Bitcoin Crashes → Crypto Regulation Hardens",
-    emoji: "₿",
-    description: "A BTC crash historically triggers regulatory crackdown. Check if regulation markets have priced this in.",
-    groupALabel: "BTC PRICE",
-    groupBLabel: "CRYPTO REGULATION",
-    keywordsA: ["bitcoin dip", "bitcoin below", "bitcoin crash", "bitcoin drop"],
-    keywordsB: ["crypto regulation", "bitcoin etf", "sec crypto", "coinbase", "crypto ban"],
-  },
-  {
-    theme: "AI Breakthrough → Nvidia & Tech Stocks Spike",
-    emoji: "🤖",
-    description: "Major AI model releases historically move Nvidia and tech valuations. Are these markets in sync?",
-    groupALabel: "AI MILESTONES",
-    groupBLabel: "TECH MARKET",
-    keywordsA: ["openai", "anthropic", "gpt-5", "gemini", "ai model release", "best ai model"],
-    keywordsB: ["nvidia", "s&p 500", "nasdaq", "tech stock", "microsoft stock", "apple stock"],
-  },
-  {
-    theme: "Russia-Ukraine Ceasefire → Energy Prices Drop",
-    emoji: "🇺🇦",
-    description: "A ceasefire reopens gas pipelines and removes energy war premium. Oil and gas markets should reprice.",
-    groupALabel: "WAR OUTCOME",
-    groupBLabel: "ENERGY MARKETS",
-    keywordsA: ["ukraine ceasefire", "russia ukraine", "zelensky", "putin ukraine", "ukraine war ends"],
-    keywordsB: ["natural gas", "crude oil", "europe energy", "gas price", "oil price"],
-  },
-  {
-    theme: "US Debt Ceiling Crisis → Dollar Weakens",
-    emoji: "💵",
-    description: "Debt ceiling fights historically weaken the dollar and spike gold. Check if currency markets reflect this.",
-    groupALabel: "DEBT CEILING",
-    groupBLabel: "CURRENCY / GOLD",
-    keywordsA: ["debt ceiling", "us default", "government shutdown", "us debt"],
-    keywordsB: ["dollar index", "gold price", "dxy", "gold above"],
-  },
-  {
-    theme: "China Invades Taiwan → Semiconductor Crisis",
-    emoji: "🔧",
-    description: "Taiwan produces 90% of advanced chips. Invasion odds should be reflected in semiconductor markets.",
-    groupALabel: "TAIWAN CONFLICT",
-    groupBLabel: "TECH / CHIPS",
-    keywordsA: ["china invade taiwan", "taiwan invasion", "taiwan strait", "china taiwan"],
-    keywordsB: ["semiconductor", "nvidia", "tsmc", "chip shortage", "tech supply"],
-  },
-] as const;
-
 // ── Filter & enrich a single market ──────────────────────────────────────────
 function enrichMarket(m: GammaMarket): ChainMarket | null {
   try {
@@ -222,58 +125,28 @@ export function useAllMarkets() {
   });
 }
 
-// ── Build hardcoded chains from keyword definitions ───────────────────────────
-function buildHardcodedChains(allMarkets: GammaMarket[]): CrossChain[] {
-  return CROSS_CHAINS.map(def => {
-    const matchGroup = (keywords: readonly string[], limit = 6) => {
-      const results: ChainMarket[] = [];
-      const seen = new Set<string>();
-      for (const m of allMarkets) {
-        const key = m.conditionId || m.id;
-        if (seen.has(key)) continue;
-        const q = (m.question || "").toLowerCase();
-        if (!keywords.some(kw => q.includes(kw))) continue;
-        const enriched = enrichMarket(m);
-        if (!enriched) continue;
-        seen.add(key);
-        results.push(enriched);
-        if (results.length >= limit) break;
-      }
-      return results;
-    };
-
-    const groupA = matchGroup(def.keywordsA);
-    const groupB = matchGroup(def.keywordsB);
-
-    if (groupA.length === 0 || groupB.length === 0) return null;
-    if (groupA.length + groupB.length < 3) return null;
-
-    const allMkts = [...groupA, ...groupB];
-    const totalVolume = allMkts.reduce((s, m) => s + parseFloat((m.volume24hr || 0) as any), 0);
-
-    return {
-      theme: def.theme,
-      description: def.description,
-      emoji: def.emoji,
-      groupALabel: def.groupALabel,
-      groupBLabel: def.groupBLabel,
-      groupA,
-      groupB,
-      totalVolume,
-      source: "keyword" as const,
-    };
-  }).filter((c): c is CrossChain & { source: string } => c !== null);
-}
-
-// ── Fetch AI-discovered chains from Claude ────────────────────────────────────
+// ── Fetch AI-discovered chains from Claude (fully dynamic) ───────────────────
 async function fetchAiChains(allMarkets: GammaMarket[]): Promise<CrossChain[]> {
-  const enriched = allMarkets.map(m => enrichMarket(m)).filter((m): m is ChainMarket => m !== null);
-  const top60 = enriched.slice(0, 60);
+  // Filter to genuinely meaningful, uncertain markets
+  const meaningful = allMarkets
+    .filter(m => {
+      try {
+        const yes = parseFloat(JSON.parse(m.outcomePrices || '["0.5"]')[0]);
+        const vol24 = parseFloat(m.volume24hr as any) || 0;
+        return yes > 0.05 && yes < 0.95 && vol24 > 10000 && m.active && !m.closed;
+      } catch { return false; }
+    })
+    .sort((a, b) => parseFloat(b.volume24hr as any) - parseFloat(a.volume24hr as any));
 
-  const marketList = top60
+  const top80 = meaningful.slice(0, 80);
+  if (top80.length < 10) return [];
+
+  const marketList = top80
     .map((m, i) => {
-      const vol = parseFloat((m.volume24hr || 0) as any);
-      return `${i}|${m.question}|${(m.probability * 100).toFixed(1)}%|$${(vol / 1000).toFixed(0)}K`;
+      const yes = parseFloat(JSON.parse(m.outcomePrices || '["0.5"]')[0]);
+      const vol = parseFloat(m.volume24hr as any) || 0;
+      const change = parseFloat((m.oneDayPriceChange ?? m.priceChange ?? 0) as any) || 0;
+      return `${i}. "${m.question}" | YES:${(yes * 100).toFixed(1)}% | 24hVol:$${(vol / 1000).toFixed(0)}K | change:${(change * 100).toFixed(1)}%`;
     })
     .join("\n");
 
@@ -281,88 +154,125 @@ async function fetchAiChains(allMarkets: GammaMarket[]): Promise<CrossChain[]> {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      model: "claude-haiku-4-5",
-      max_tokens: 1200,
+      model: "claude-sonnet-4-5",
+      max_tokens: 2000,
       messages: [{
         role: "user",
-        content: `These are the top Polymarket prediction markets right now:\n${marketList}\n\nFind 3-5 groups where markets from DIFFERENT topics are causally connected.\nMeaning: if one market moves, the other SHOULD logically reprice too.\n\nRules:\n- Groups MUST cross categories (conflict + economy, politics + policy, etc)\n- Do NOT group markets about the same topic\n- Each group needs a clear causal "IF → THEN" logic\n- Only use market indices from the list above\n- Skip pure sports markets\n\nReturn ONLY valid JSON, no other text:\n[\n  {\n    "theme": "short causal title e.g. If X → Then Y",\n    "emoji": "single emoji",\n    "description": "one sentence explaining why these move together",\n    "sideA_label": "LEFT COLUMN LABEL",\n    "sideA_indices": [0, 3, 7],\n    "sideB_label": "RIGHT COLUMN LABEL",\n    "sideB_indices": [12, 15]\n  }\n]`,
+        content: `You are analyzing ALL currently active Polymarket prediction markets.
+
+Here are the top 80 markets by 24h volume right now:
+${marketList}
+
+Your job: find 6-8 groups of markets that are CAUSALLY CONNECTED across different topics.
+
+The key rule: markets in the same group must be from DIFFERENT topics/categories but logically linked — if one moves, the others SHOULD reprice too but might not have yet.
+
+Good examples of what we want:
+- "US invades Iran" (conflict) + "Oil hits $100" (commodities) — invasion disrupts oil supply
+- "Fed holds rates" (monetary) + "Recession by 2026" (economy) — high rates cause recession
+- "Democrats win Senate" (politics) + "Climate bill passes" (policy) — Senate controls legislation
+- "China invades Taiwan" (conflict) + "Nvidia stock drops" (tech) — Taiwan makes chips
+
+Bad examples — do NOT do these:
+- Grouping all Iran markets together — same topic
+- Grouping all Fed rate markets together — same topic
+- Grouping all Bitcoin price targets together — same topic
+
+For each group:
+- sideA = the CAUSE markets (the thing that triggers)
+- sideB = the EFFECT markets (the thing that should reprice if sideA moves)
+- Use ONLY index numbers from the list above (0-${top80.length - 1})
+- Each side needs 2-5 markets minimum
+- Groups must cross categories
+
+Return ONLY valid JSON array, absolutely no other text:
+[
+  {
+    "theme": "Cause → Effect (short, specific)",
+    "emoji": "relevant emoji",
+    "description": "One sentence: exactly why these markets move together",
+    "sideA_label": "CAUSE CATEGORY NAME",
+    "sideA_indices": [1, 4, 7],
+    "sideB_label": "EFFECT CATEGORY NAME",
+    "sideB_indices": [12, 23, 31]
+  }
+]`,
       }],
     }),
   });
 
   if (!response.ok) return [];
-
   const data = await response.json();
   if (data.error) return [];
 
   try {
     const text: string = data?.content?.[0]?.text ?? "[]";
-    const start = text.indexOf("[");
-    const end = text.lastIndexOf("]");
+    // Strip markdown code fences if present
+    const clean = text.replace(/```json|```/g, "").trim();
+    const start = clean.indexOf("[");
+    const end = clean.lastIndexOf("]");
     if (start === -1 || end === -1) return [];
 
-    const aiChains: any[] = JSON.parse(text.slice(start, end + 1));
+    const aiChains: any[] = JSON.parse(clean.slice(start, end + 1));
 
     return aiChains
       .map(chain => {
-        const groupA: ChainMarket[] = (chain.sideA_indices || [])
-          .filter((i: number) => i >= 0 && i < top60.length)
-          .map((i: number) => top60[i])
-          .filter(Boolean);
-        const groupB: ChainMarket[] = (chain.sideB_indices || [])
-          .filter((i: number) => i >= 0 && i < top60.length)
-          .map((i: number) => top60[i])
-          .filter(Boolean);
+        const toChainMarket = (idx: number): ChainMarket | null => {
+          const m = top80[idx];
+          if (!m) return null;
+          return enrichMarket(m);
+        };
 
-        if (groupA.length === 0 || groupB.length === 0) return null;
-        if (groupA.length + groupB.length < 3) return null;
+        const groupA: ChainMarket[] = (chain.sideA_indices || [])
+          .filter((i: number) => i >= 0 && i < top80.length)
+          .map(toChainMarket)
+          .filter((m: ChainMarket | null): m is ChainMarket => m !== null);
+
+        const groupB: ChainMarket[] = (chain.sideB_indices || [])
+          .filter((i: number) => i >= 0 && i < top80.length)
+          .map(toChainMarket)
+          .filter((m: ChainMarket | null): m is ChainMarket => m !== null);
+
+        if (groupA.length < 1 || groupB.length < 1) return null;
 
         const allMkts = [...groupA, ...groupB];
         const totalVolume = allMkts.reduce((s, m) => s + parseFloat((m.volume24hr || 0) as any), 0);
 
         return {
-          theme: chain.theme || "AI-Discovered Chain",
+          theme: chain.theme || "Causal Chain",
           description: chain.description || "",
           emoji: chain.emoji || "🔗",
-          groupALabel: chain.sideA_label || "SIDE A",
-          groupBLabel: chain.sideB_label || "SIDE B",
+          groupALabel: chain.sideA_label || "CAUSE",
+          groupBLabel: chain.sideB_label || "EFFECT",
           groupA,
           groupB,
           totalVolume,
           source: "ai" as const,
-        };
+        } satisfies CrossChain;
       })
-      .filter((c): c is CrossChain & { source: string } => c !== null);
+      .filter((c): c is CrossChain => c !== null);
   } catch {
     return [];
   }
 }
 
-// ── Cross-category causal chains (hardcoded + AI) ─────────────────────────────
+// ── Cross-category causal chains — fully AI-driven ───────────────────────────
 export function useCausalChains() {
   const { data: allMarkets = [], isLoading: marketsLoading, error, refetch, isFetching } = useAllMarkets();
 
-  // AI chains — cached 30 minutes, only runs after markets load
-  const { data: aiChains = [], isLoading: aiLoading } = useQuery({
-    queryKey: ["ai-chains", allMarkets.length > 0 ? allMarkets[0]?.id : "empty"],
+  // Claude discovers all chains dynamically. Cached 30 min — no hardcoded lists.
+  const { data: chains = [], isLoading: aiLoading } = useQuery({
+    queryKey: ["ai-chains-v2", allMarkets.length > 0 ? allMarkets[0]?.id : "empty"],
     queryFn: () => fetchAiChains(allMarkets),
     enabled: allMarkets.length > 0,
     staleTime: 30 * 60 * 1000,
     retry: 1,
   });
 
-  const hardcodedChains = buildHardcodedChains(allMarkets);
-
-  // Merge: hardcoded first, then AI-discovered. Deduplicate by theme.
-  const seen = new Set<string>();
-  const chains: CrossChain[] = [...hardcodedChains, ...aiChains].filter(c => {
-    if (seen.has(c.theme)) return false;
-    seen.add(c.theme);
-    return true;
-  }).sort((a, b) => b.totalVolume - a.totalVolume);
+  const sorted = [...chains].sort((a, b) => b.totalVolume - a.totalVolume);
 
   return {
-    chains,
+    chains: sorted,
     isLoading: marketsLoading,
     aiLoading,
     error,

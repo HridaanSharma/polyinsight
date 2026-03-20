@@ -2,13 +2,9 @@ import express, { type Express } from "express";
 import cors from "cors";
 import pinoHttp from "pino-http";
 import path from "path";
-import { fileURLToPath } from "url";
 import { existsSync } from "fs";
 import router from "./routes";
 import { logger } from "./lib/logger";
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 const app: Express = express();
 
@@ -42,7 +38,7 @@ app.get("/health", (_req, res) => {
 app.use("/api", router);
 
 // Serve built frontend if present (production)
-const frontendDist = path.resolve(__dirname, "../../polymarket-dashboard/dist/public");
+const frontendDist = path.resolve(process.cwd(), "artifacts/polymarket-dashboard/dist/public");
 if (existsSync(frontendDist)) {
   app.use(express.static(frontendDist));
   app.get("*", (_req, res) => {

@@ -1,0 +1,86 @@
+Looking at these honestly — most are **invalid or weak**. Here's the breakdown:
+
+**Valid ✅**
+- Iran Conflict → Oil Supply Shock ✅ — direct, correct
+- Fed Rate Hold → Bitcoin Weakness ✅ — direct, correct
+- Iran Ceasefire → Oil Risk Premium Collapse ✅ — direct, correct
+- Fed Rate Hold → Ethereum Weakness ✅ — direct, correct
+- Kharg Island Loss → Oil Shortage ✅ — direct, correct
+
+**Invalid ❌ and why:**
+- US-Iran War → Bitcoin Volatility ❌ — too many steps, not direct. War doesn't directly move Bitcoin
+- US-Iran War → Apple/Alphabet Market Cap ❌ — completely nonsensical. War doesn't make people buy Apple stock
+- Oil Price Spike → Fed Rate Hold ❌ — both sides are causes of each other, circular logic, also oil markets + Fed markets are both already in other chains
+- Oil Crisis → Bitcoin Safe Haven ❌ — too speculative, "tests whether Bitcoin functions as digital gold" is not a direct mechanism
+
+The core problem is Claude keeps recycling Iran, Oil, Fed, and Bitcoin because those are the highest volume markets in your top 200. It's finding the same markets repeatedly and inventing connections between them.
+
+Tell your agent:
+
+---
+
+Add this post-processing step after Claude returns chains — before rendering:
+
+```javascript
+// After getting allChains from Claude, run this deduplication
+// Track which markets have already been used as sideA
+const usedSideAMarkets = new Set()
+const usedSideBMarkets = new Set()
+
+const deduped = allChains
+  .sort((a, b) => b.totalVol - a.totalVol)
+  .filter(chain => {
+    // Count how many sideA markets are already used in previous chains
+    const sideAIds = chain.sideA.markets.map(m => m.conditionId)
+    const sideBIds = chain.sideB.markets.map(m => m.conditionId)
+    
+    const sideAOverlap = sideAIds.filter(id => usedSideAMarkets.has(id)).length
+    const sideBOverlap = sideBIds.filter(id => usedSideBMarkets.has(id)).length
+    
+    // If more than half the markets on either side already appeared — reject
+    if (sideAOverlap > sideAIds.length / 2) return false
+    if (sideBOverlap > sideBIds.length / 2) return false
+    
+    // Mark these markets as used
+    sideAIds.forEach(id => usedSideAMarkets.add(id))
+    sideBIds.forEach(id => usedSideBMarkets.add(id))
+    
+    return true
+  })
+  // Hard reject specific weak chain patterns
+  .filter(chain => {
+    const theme = chain.theme.toLowerCase()
+    const desc = chain.description.toLowerCase()
+    const allText = chain.sideA.markets.concat(chain.sideB.markets)
+      .map(m => m.question.toLowerCase()).join(' ')
+
+    // Reject Iran + Bitcoin (not direct)
+    const hasIranA = chain.sideA.markets.some(m => m.question.toLowerCase().includes('iran'))
+    const hasBitcoinB = chain.sideB.markets.some(m => m.question.toLowerCase().includes('bitcoin'))
+    if (hasIranA && hasBitcoinB) return false
+
+    // Reject Oil + Bitcoin (not direct)
+    const hasOilA = chain.sideA.markets.some(m => m.question.toLowerCase().includes('crude oil'))
+    const hasBitcoinB2 = chain.sideB.markets.some(m => m.question.toLowerCase().includes('bitcoin'))
+    if (hasOilA && hasBitcoinB2) return false
+
+    // Reject anything with "safe haven test" or "tests whether" — speculative
+    if (desc.includes('tests whether') || desc.includes('safe haven test')) return false
+
+    // Reject war + market cap — not a direct mechanism
+    const hasWar = allText.includes('invade') || allText.includes('forces enter')
+    const hasMarketCap = allText.includes('largest company') || allText.includes('market cap')
+    if (hasWar && hasMarketCap) return false
+
+    // Reject circular chains — if sideA topic appears in sideB
+    const sideATopics = chain.sideA.markets.map(m => m.question.toLowerCase()).join(' ')
+    const sideBTopics = chain.sideB.markets.map(m => m.question.toLowerCase()).join(' ')
+    if (sideATopics.includes('crude oil') && sideBTopics.includes('fed')) return false
+    if (sideATopics.includes('fed') && sideBTopics.includes('crude oil')) return false
+
+    return true
+  })
+  .slice(0, 15)
+```
+
+This will kill the recycled and speculative chains and keep only the 5 genuinely valid ones plus any new valid ones Claude finds from the rest of the 200 markets.

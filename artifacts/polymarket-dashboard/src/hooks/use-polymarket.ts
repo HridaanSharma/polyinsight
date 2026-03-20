@@ -347,21 +347,68 @@ async function fetchAiChains(allMarkets: GammaMarket[]): Promise<CrossChain[]> {
   const chains = parseChainsFromResponse(data, top200);
   console.log("Valid chains after filtering:", chains.length);
 
-  // Deduplicate by theme, then by sideA market set, sort by volume, cap at 25
-  const seenThemes = new Set<string>();
-  const seenSideA = new Set<string>();
+  // ── Phase 1: market-reuse deduplication ──────────────────────────────────
+  // Reject chains where more than half of either side's markets already appeared
+  const usedSideAMarkets = new Set<string>();
+  const usedSideBMarkets = new Set<string>();
 
-  return chains
-    .filter(c => {
-      if (seenThemes.has(c.theme)) return false;
-      seenThemes.add(c.theme);
-      const sideAKey = c.groupA.map(m => m.conditionId).sort().join(",");
-      if (seenSideA.has(sideAKey)) return false;
-      seenSideA.add(sideAKey);
+  const deduped = chains
+    .sort((a, b) => b.totalVolume - a.totalVolume)
+    .filter(chain => {
+      const sideAIds = chain.groupA.map(m => m.conditionId);
+      const sideBIds = chain.groupB.map(m => m.conditionId);
+      const sideAOverlap = sideAIds.filter(id => usedSideAMarkets.has(id)).length;
+      const sideBOverlap = sideBIds.filter(id => usedSideBMarkets.has(id)).length;
+      if (sideAOverlap > sideAIds.length / 2) return false;
+      if (sideBOverlap > sideBIds.length / 2) return false;
+      sideAIds.forEach(id => usedSideAMarkets.add(id));
+      sideBIds.forEach(id => usedSideBMarkets.add(id));
+      return true;
+    });
+
+  // ── Phase 2: hard-reject weak/speculative patterns ────────────────────────
+  return deduped
+    .filter(chain => {
+      const desc = chain.description.toLowerCase();
+      const sideAText = chain.groupA.map(m => m.question.toLowerCase()).join(" ");
+      const sideBText = chain.groupB.map(m => m.question.toLowerCase()).join(" ");
+      const allText = sideAText + " " + sideBText;
+
+      // Reject Iran → Bitcoin (not a direct mechanism)
+      if (chain.groupA.some(m => m.question.toLowerCase().includes("iran")) &&
+          chain.groupB.some(m => m.question.toLowerCase().includes("bitcoin"))) {
+        console.log("Rejected Iran→Bitcoin:", chain.theme);
+        return false;
+      }
+
+      // Reject Oil → Bitcoin (not a direct mechanism)
+      if (chain.groupA.some(m => m.question.toLowerCase().includes("crude oil")) &&
+          chain.groupB.some(m => m.question.toLowerCase().includes("bitcoin"))) {
+        console.log("Rejected Oil→Bitcoin:", chain.theme);
+        return false;
+      }
+
+      // Reject speculative "tests whether" framing
+      if (desc.includes("tests whether") || desc.includes("safe haven test")) {
+        console.log("Rejected speculative framing:", chain.theme);
+        return false;
+      }
+
+      // Reject war + stock market cap (no direct mechanism)
+      const hasWar = allText.includes("invade") || allText.includes("forces enter");
+      const hasMarketCap = allText.includes("largest company") || allText.includes("market cap");
+      if (hasWar && hasMarketCap) {
+        console.log("Rejected war+market cap:", chain.theme);
+        return false;
+      }
+
+      // Reject circular: oil→Fed or Fed→oil
+      if (sideAText.includes("crude oil") && sideBText.includes(" fed ")) return false;
+      if (sideAText.includes(" fed ") && sideBText.includes("crude oil")) return false;
+
       return true;
     })
-    .sort((a, b) => b.totalVolume - a.totalVolume)
-    .slice(0, 25);
+    .slice(0, 15);
 }
 
 // ── Cross-category causal chains — fully AI-driven ───────────────────────────

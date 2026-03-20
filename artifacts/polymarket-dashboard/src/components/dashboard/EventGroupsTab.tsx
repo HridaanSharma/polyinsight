@@ -1,7 +1,7 @@
 import { useCausalChains, type CrossChain, type ChainMarket } from "@/hooks/use-polymarket";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { AlertTriangle, ExternalLink, RefreshCw, Loader2, TrendingUp, TrendingDown, Activity, ArrowRight } from "lucide-react";
+import { AlertTriangle, ExternalLink, RefreshCw, Loader2, TrendingUp, TrendingDown, Activity, ArrowRight, Sparkles } from "lucide-react";
 
 function formatVol(v: number): string {
   if (v >= 1_000_000) return `$${(v / 1_000_000).toFixed(1)}M`;
@@ -107,13 +107,25 @@ function CrossChainCard({ chain }: { chain: CrossChain }) {
   const movedCount = allMarkets.filter(m => m.moved).length;
 
   return (
-    <div className="rounded-xl border border-white/10 bg-white/5 p-4 flex flex-col gap-3 hover:bg-white/[0.07] transition-colors">
+    <div className={`rounded-xl border p-4 flex flex-col gap-3 transition-colors ${
+      chain.source === "ai"
+        ? "border-purple-500/20 bg-purple-500/5 hover:bg-purple-500/10"
+        : "border-white/10 bg-white/5 hover:bg-white/[0.07]"
+    }`}>
       {/* Header */}
       <div className="flex items-start justify-between gap-2">
         <div className="flex items-center gap-2.5">
           <span className="text-xl leading-none">{chain.emoji}</span>
           <div>
-            <h3 className="text-sm font-bold text-white leading-snug">{chain.theme}</h3>
+            <div className="flex items-center gap-1.5">
+              <h3 className="text-sm font-bold text-white leading-snug">{chain.theme}</h3>
+              {chain.source === "ai" && (
+                <span className="inline-flex items-center gap-0.5 text-[9px] font-bold text-purple-400 bg-purple-500/15 border border-purple-500/25 px-1.5 py-0.5 rounded-full uppercase tracking-wider">
+                  <Sparkles className="w-2.5 h-2.5" />
+                  AI
+                </span>
+              )}
+            </div>
             <p className="text-xs text-white/40 mt-0.5">{chain.description}</p>
           </div>
         </div>
@@ -148,7 +160,7 @@ function CrossChainCard({ chain }: { chain: CrossChain }) {
 }
 
 export function EventGroupsTab() {
-  const { chains, isLoading, error, refetch, isFetching } = useCausalChains();
+  const { chains, isLoading, aiLoading, error, refetch, isFetching } = useCausalChains();
 
   if (isLoading) {
     return (
@@ -184,7 +196,7 @@ export function EventGroupsTab() {
     <div className="flex flex-col gap-4">
       {/* Header bar */}
       <div className="flex items-center justify-between px-1">
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 flex-wrap">
           <span className="text-sm text-white/60">
             {chains.length} cross-category chain{chains.length !== 1 ? "s" : ""}
           </span>
@@ -192,6 +204,18 @@ export function EventGroupsTab() {
             <Badge className="bg-orange-500/20 text-orange-300 border-orange-500/30 text-xs border">
               {totalMoved} moved
             </Badge>
+          )}
+          {aiLoading && (
+            <span className="inline-flex items-center gap-1 text-xs text-purple-400 bg-purple-500/10 border border-purple-500/20 px-2 py-0.5 rounded-full">
+              <Loader2 className="w-3 h-3 animate-spin" />
+              Finding AI chains…
+            </span>
+          )}
+          {!aiLoading && chains.some(c => c.source === "ai") && (
+            <span className="inline-flex items-center gap-1 text-xs text-purple-400 bg-purple-500/10 border border-purple-500/20 px-2 py-0.5 rounded-full">
+              <Sparkles className="w-3 h-3" />
+              {chains.filter(c => c.source === "ai").length} AI-discovered
+            </span>
           )}
         </div>
         <Button

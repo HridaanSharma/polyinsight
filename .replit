@@ -24,3 +24,8 @@ expertMode = true
 [postMerge]
 path = "scripts/post-merge.sh"
 timeoutMs = 20000
+
+[userenv]
+
+[userenv.shared]
+ANTHROPIC_API_KEY = "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"

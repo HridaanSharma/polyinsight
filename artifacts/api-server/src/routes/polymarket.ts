@@ -228,4 +228,39 @@ Only include genuinely interesting and significant mispricings. Max 5 pairs. Ret
   }
 });
 
+// ── Claude proxy for dynamic chain discovery ─────────────────────────────────
+router.post("/polymarket/claude", async (req, res) => {
+  // Prefer user's own key with direct Anthropic API.
+  // Fall back to Replit AI integration proxy if available.
+  const directKey = process.env.ANTHROPIC_API_KEY;
+  const replitKey = process.env.AI_INTEGRATIONS_ANTHROPIC_API_KEY;
+  const replitBase = process.env.AI_INTEGRATIONS_ANTHROPIC_BASE_URL;
+
+  const apiKey = directKey || replitKey;
+  const baseUrl = directKey
+    ? "https://api.anthropic.com"
+    : (replitBase || "https://api.anthropic.com");
+
+  if (!apiKey) {
+    res.status(503).json({ error: "ANTHROPIC_API_KEY not configured" });
+    return;
+  }
+
+  try {
+    const response = await fetch(`${baseUrl}/v1/messages`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify(req.body),
+    });
+    const data = await response.json();
+    res.json(data);
+  } catch (err: any) {
+    res.status(502).json({ error: err?.message ?? "Claude proxy error" });
+  }
+});
+
 export default router;

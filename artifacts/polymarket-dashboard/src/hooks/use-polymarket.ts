@@ -62,6 +62,7 @@ export interface CrossChain {
   groupA: ChainMarket[];
   groupB: ChainMarket[];
   totalVolume: number;
+  source?: "keyword" | "ai";
 }
 
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
@@ -221,11 +222,9 @@ export function useAllMarkets() {
   });
 }
 
-// ── Cross-category causal chains ─────────────────────────────────────────────
-export function useCausalChains() {
-  const { data: allMarkets = [], ...rest } = useAllMarkets();
-
-  const chains: CrossChain[] = CROSS_CHAINS.map(def => {
+// ── Build hardcoded chains from keyword definitions ───────────────────────────
+function buildHardcodedChains(allMarkets: GammaMarket[]): CrossChain[] {
+  return CROSS_CHAINS.map(def => {
     const matchGroup = (keywords: readonly string[], limit = 6) => {
       const results: ChainMarket[] = [];
       const seen = new Set<string>();
@@ -246,9 +245,7 @@ export function useCausalChains() {
     const groupA = matchGroup(def.keywordsA);
     const groupB = matchGroup(def.keywordsB);
 
-    // Both sides must have at least 1 market — that's the whole cross-category value
     if (groupA.length === 0 || groupB.length === 0) return null;
-    // Need at least 3 markets total across both sides
     if (groupA.length + groupB.length < 3) return null;
 
     const allMkts = [...groupA, ...groupB];
@@ -263,12 +260,115 @@ export function useCausalChains() {
       groupA,
       groupB,
       totalVolume,
+      source: "keyword" as const,
     };
-  })
-    .filter((c): c is CrossChain => c !== null)
-    .sort((a, b) => b.totalVolume - a.totalVolume); // highest volume chains first
+  }).filter((c): c is CrossChain & { source: string } => c !== null);
+}
 
-  return { chains, ...rest };
+// ── Fetch AI-discovered chains from Claude ────────────────────────────────────
+async function fetchAiChains(allMarkets: GammaMarket[]): Promise<CrossChain[]> {
+  const enriched = allMarkets.map(m => enrichMarket(m)).filter((m): m is ChainMarket => m !== null);
+  const top60 = enriched.slice(0, 60);
+
+  const marketList = top60
+    .map((m, i) => {
+      const vol = parseFloat((m.volume24hr || 0) as any);
+      return `${i}|${m.question}|${(m.probability * 100).toFixed(1)}%|$${(vol / 1000).toFixed(0)}K`;
+    })
+    .join("\n");
+
+  const response = await fetch(`${BASE}/api/polymarket/claude`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: "claude-3-5-haiku-20241022",
+      max_tokens: 1200,
+      messages: [{
+        role: "user",
+        content: `These are the top Polymarket prediction markets right now:\n${marketList}\n\nFind 3-5 groups where markets from DIFFERENT topics are causally connected.\nMeaning: if one market moves, the other SHOULD logically reprice too.\n\nRules:\n- Groups MUST cross categories (conflict + economy, politics + policy, etc)\n- Do NOT group markets about the same topic\n- Each group needs a clear causal "IF → THEN" logic\n- Only use market indices from the list above\n- Skip pure sports markets\n\nReturn ONLY valid JSON, no other text:\n[\n  {\n    "theme": "short causal title e.g. If X → Then Y",\n    "emoji": "single emoji",\n    "description": "one sentence explaining why these move together",\n    "sideA_label": "LEFT COLUMN LABEL",\n    "sideA_indices": [0, 3, 7],\n    "sideB_label": "RIGHT COLUMN LABEL",\n    "sideB_indices": [12, 15]\n  }\n]`,
+      }],
+    }),
+  });
+
+  if (!response.ok) return [];
+
+  const data = await response.json();
+  if (data.error) return [];
+
+  try {
+    const text: string = data?.content?.[0]?.text ?? "[]";
+    const start = text.indexOf("[");
+    const end = text.lastIndexOf("]");
+    if (start === -1 || end === -1) return [];
+
+    const aiChains: any[] = JSON.parse(text.slice(start, end + 1));
+
+    return aiChains
+      .map(chain => {
+        const groupA: ChainMarket[] = (chain.sideA_indices || [])
+          .filter((i: number) => i >= 0 && i < top60.length)
+          .map((i: number) => top60[i])
+          .filter(Boolean);
+        const groupB: ChainMarket[] = (chain.sideB_indices || [])
+          .filter((i: number) => i >= 0 && i < top60.length)
+          .map((i: number) => top60[i])
+          .filter(Boolean);
+
+        if (groupA.length === 0 || groupB.length === 0) return null;
+        if (groupA.length + groupB.length < 3) return null;
+
+        const allMkts = [...groupA, ...groupB];
+        const totalVolume = allMkts.reduce((s, m) => s + parseFloat((m.volume24hr || 0) as any), 0);
+
+        return {
+          theme: chain.theme || "AI-Discovered Chain",
+          description: chain.description || "",
+          emoji: chain.emoji || "🔗",
+          groupALabel: chain.sideA_label || "SIDE A",
+          groupBLabel: chain.sideB_label || "SIDE B",
+          groupA,
+          groupB,
+          totalVolume,
+          source: "ai" as const,
+        };
+      })
+      .filter((c): c is CrossChain & { source: string } => c !== null);
+  } catch {
+    return [];
+  }
+}
+
+// ── Cross-category causal chains (hardcoded + AI) ─────────────────────────────
+export function useCausalChains() {
+  const { data: allMarkets = [], isLoading: marketsLoading, error, refetch, isFetching } = useAllMarkets();
+
+  // AI chains — cached 30 minutes, only runs after markets load
+  const { data: aiChains = [], isLoading: aiLoading } = useQuery({
+    queryKey: ["ai-chains", allMarkets.length > 0 ? allMarkets[0]?.id : "empty"],
+    queryFn: () => fetchAiChains(allMarkets),
+    enabled: allMarkets.length > 0,
+    staleTime: 30 * 60 * 1000,
+    retry: 1,
+  });
+
+  const hardcodedChains = buildHardcodedChains(allMarkets);
+
+  // Merge: hardcoded first, then AI-discovered. Deduplicate by theme.
+  const seen = new Set<string>();
+  const chains: CrossChain[] = [...hardcodedChains, ...aiChains].filter(c => {
+    if (seen.has(c.theme)) return false;
+    seen.add(c.theme);
+    return true;
+  }).sort((a, b) => b.totalVolume - a.totalVolume);
+
+  return {
+    chains,
+    isLoading: marketsLoading,
+    aiLoading,
+    error,
+    refetch,
+    isFetching,
+  };
 }
 
 // ── 500-market set for Volume Spikes ─────────────────────────────────────────

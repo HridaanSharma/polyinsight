@@ -1,0 +1,139 @@
+Fix trade button — fetch real event URL:
+javascript// Step 1: Add this proxy route in server.js
+app.get('/proxy/gamma/events', async (req, res) => {
+  const params = new URLSearchParams(req.query)
+  const response = await fetch(
+    `https://gamma-api.polymarket.com/events?${params}`,
+    { headers: { 'Accept': 'application/json', 'User-Agent': 'Mozilla/5.0' } }
+  )
+  const data = await response.json()
+  res.json(data)
+})
+javascript// Step 2: Fetch events instead of markets for URL building
+// Events have the correct slug that matches polymarket.com/event/[slug]
+const eventsRes = await fetch('/proxy/gamma/events?active=true&closed=false&limit=500&order=volume24hr&ascending=false')
+const events = await eventsRes.json()
+
+// Build a map: conditionId -> correct polymarket URL
+const urlMap = {}
+events.forEach(event => {
+  const eventSlug = event.slug  // this is the real URL slug
+  if (event.markets) {
+    event.markets.forEach(m => {
+      // Real URL format: https://polymarket.com/event/[eventSlug]
+      urlMap[m.conditionId] = `https://polymarket.com/event/${eventSlug}`
+    })
+  }
+})
+
+// Step 3: When building any trade button, look up URL from map
+const getTradeUrl = (market) => {
+  if (urlMap[market.conditionId]) return urlMap[market.conditionId]
+  // fallback: use event.url field if it exists on the market object
+  if (market.event?.slug) return `https://polymarket.com/event/${market.event.slug}`
+  return `https://polymarket.com`
+}
+The broken URL was /event/lol-ly-jdg-2026-03-20-game-handicap-home-2pt5 — that's a market slug. The correct URL is /event/lol-ly-jdg-2026-03-20 — the parent event slug. The events endpoint has this correctly.
+
+Fix event groups to use real dynamic data — not just pre-hardcoded chains:
+javascript// After fetching all markets, ALSO run this AI grouping
+// to find chains beyond your hardcoded 10
+
+const findDynamicChains = async (markets) => {
+  // Take top 60 markets by volume — these are what people actually trade
+  const top60 = markets
+    .sort((a,b) => parseFloat(b.volume24hr) - parseFloat(a.volume24hr))
+    .slice(0, 60)
+    .map((m, i) => {
+      const yes = parseFloat(JSON.parse(m.outcomePrices)[0])
+      return `${i}|${m.question}|${(yes*100).toFixed(1)}%|$${parseFloat(m.volume24hr/1000).toFixed(0)}K`
+    })
+    .join('\n')
+
+  const response = await fetch('/proxy/claude', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 1000,
+      messages: [{
+        role: 'user',
+        content: `These are top Polymarket prediction markets right now:
+${top60}
+
+Find 4-6 groups where markets from DIFFERENT topics are causally connected.
+Meaning: if one market moves, the other SHOULD logically reprice too.
+
+Rules:
+- Groups must cross categories (conflict + economy, politics + policy, etc)
+- Do NOT group markets about the same topic together
+- Each group needs a clear causal "IF → THEN" logic
+- Only use market indices from the list above
+
+Return ONLY valid JSON, no other text:
+[
+  {
+    "theme": "short causal title e.g. If X → Then Y",
+    "emoji": "single emoji",
+    "description": "one sentence explaining why these move together",
+    "sideA_label": "LEFT COLUMN LABEL",
+    "sideA_indices": [0, 3, 7],
+    "sideB_label": "RIGHT COLUMN LABEL", 
+    "sideB_indices": [12, 15]
+  }
+]`
+      }]
+    })
+  })
+
+  const data = await response.json()
+  try {
+    const text = data.content[0].text
+    const clean = text.replace(/```json|```/g, '').trim()
+    const aiChains = JSON.parse(clean)
+    
+    // Convert AI indices back to real market objects
+    return aiChains.map(chain => ({
+      theme: chain.theme,
+      emoji: chain.emoji,
+      description: chain.description,
+      sideA: {
+        label: chain.sideA_label,
+        markets: chain.sideA_indices.map(i => top60Markets[i]).filter(Boolean)
+      },
+      sideB: {
+        label: chain.sideB_label,
+        markets: chain.sideB_indices.map(i => top60Markets[i]).filter(Boolean)
+      }
+    })).filter(c => c.sideA.markets.length > 0 && c.sideB.markets.length > 0)
+  } catch { return [] }
+}
+
+// Store top60 as objects too (not just strings) for index lookup
+const top60Markets = markets
+  .sort((a,b) => parseFloat(b.volume24hr) - parseFloat(a.volume24hr))
+  .slice(0, 60)
+
+// Combine hardcoded chains + AI-discovered chains
+const hardcodedChains = CAUSAL_CHAINS.map(c => buildChain(c, markets)).filter(Boolean)
+const aiChains = await findDynamicChains(markets)
+const allChains = [...hardcodedChains, ...aiChains]
+  .filter((c, i, arr) => 
+    // deduplicate by theme
+    arr.findIndex(x => x.theme === c.theme) === i
+  )
+  .sort((a, b) => b.totalVol - a.totalVol)
+Add this proxy route for Claude API calls:
+javascriptapp.post('/proxy/claude', async (req, res) => {
+  const response = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': process.env.ANTHROPIC_API_KEY,
+      'anthropic-version': '2023-06-01'
+    },
+    body: JSON.stringify(req.body)
+  })
+  const data = await response.json()
+  res.json(data)
+})

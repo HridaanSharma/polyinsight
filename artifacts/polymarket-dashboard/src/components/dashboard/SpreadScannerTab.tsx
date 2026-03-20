@@ -12,6 +12,12 @@ interface SpreadScannerTabProps {
   onRefresh: () => void;
 }
 
+function getTradeUrl(market: SpreadData["market"]): string {
+  const eventSlug = market.events?.[0]?.slug;
+  if (eventSlug) return "https://polymarket.com/event/" + eventSlug;
+  return "https://polymarket.com/event/" + market.slug;
+}
+
 export function SpreadScannerTab({ spreads, isLoading, isRefreshing, onRefresh }: SpreadScannerTabProps) {
 
   const getSpreadColor = (spread: number) => {
@@ -112,7 +118,7 @@ export function SpreadScannerTab({ spreads, isLoading, isRefreshing, onRefresh }
                       size="sm"
                       variant="secondary"
                       className="font-semibold"
-                      onClick={() => window.open(`https://polymarket.com/event/${row.market.slug}`, "_blank")}
+                      onClick={() => window.open(getTradeUrl(row.market), "_blank")}
                     >
                       Trade <ExternalLink size={13} className="ml-1" />
                     </Button>

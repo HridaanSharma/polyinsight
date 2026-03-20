@@ -41,9 +41,9 @@ const SKIP_KEYWORDS = [
 ];
 
 function getTradeUrl(m: GammaMarket): string {
-  if (m.url) return m.url;
-  if (m.slug) return `https://polymarket.com/event/${m.slug}`;
-  return "https://polymarket.com";
+  const eventSlug = m.events?.[0]?.slug;
+  if (eventSlug) return "https://polymarket.com/event/" + eventSlug;
+  return "https://polymarket.com/event/" + m.slug;
 }
 
 export function VolumeSpikesTab({ markets }: VolumeSpikesTabProps) {

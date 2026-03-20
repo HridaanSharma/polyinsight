@@ -65,6 +65,17 @@ export interface CrossChain {
   source?: "keyword" | "ai";
 }
 
+// Intermediate type between Call 1 and Call 2
+interface RawChain {
+  theme: string;
+  emoji?: string;
+  description?: string;
+  sideA_label?: string;
+  sideB_label?: string;
+  sideAMarkets: GammaMarket[];
+  sideBMarkets: GammaMarket[];
+}
+
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 
 function parseClobTokenId(raw: string | string[]): string | null {
@@ -177,11 +188,7 @@ function buildDiverseSet(allMarkets: GammaMarket[]): GammaMarket[] {
     if (!byCategory[cat]) byCategory[cat] = [];
     byCategory[cat].push(m);
   }
-
-  const catSummary = Object.entries(byCategory)
-    .map(([k, v]) => `${k}:${v.length}`)
-    .join(", ");
-  console.log("Markets by category:", catSummary);
+  console.log("Markets by category:", Object.entries(byCategory).map(([k, v]) => `${k}:${v.length}`).join(", "));
 
   const diverse: GammaMarket[] = [];
   for (const cat of Object.keys(byCategory)) {
@@ -191,229 +198,110 @@ function buildDiverseSet(allMarkets: GammaMarket[]): GammaMarket[] {
     diverse.push(...top15);
   }
 
-  // Deduplicate by conditionId
   const seen = new Set<string>();
   const final = diverse.filter(m => {
     if (seen.has(m.conditionId)) return false;
     seen.add(m.conditionId);
     return true;
   });
-
   console.log("Diverse set size:", final.length, "| Categories:", Object.keys(byCategory).join(", "));
   return final;
 }
 
-// ── Build Claude prompt with category-labeled markets ────────────────────────
-function buildChainPrompt(markets: GammaMarket[]): string {
-  const lines = markets.map((m, i) => {
+// ── Build market list string with category labels ─────────────────────────────
+function buildMarketList(markets: GammaMarket[]): string {
+  return markets.map((m, i) => {
     const yes = parseFloat(JSON.parse(m.outcomePrices || '["0.5"]')[0]);
     const vol = parseFloat(m.volume24hr as any) || 0;
     const change = parseFloat((m.oneDayPriceChange ?? m.priceChange ?? 0) as any) || 0;
     const dir = change > 0.03 ? "\u25b2" : change < -0.03 ? "\u25bc" : "=";
     const cat = categorizeMarket(m).toUpperCase();
     return `${i}.[${cat}] ${m.question} | ${(yes * 100).toFixed(0)}% | $${(vol / 1000).toFixed(0)}K | ${dir}`;
-  });
+  }).join("\n");
+}
 
-  const marketList = lines.join("\n");
-  const maxIdx = markets.length - 1;
-
+// ── CALL 1 prompt: liberal "find" — no scoring, just discover ─────────────────
+function buildFindPrompt(markets: GammaMarket[]): string {
+  const marketList = buildMarketList(markets);
   return (
-    `You are a senior macro trader. These are ALL active Polymarket markets right now, organized by category:\n\n` +
+    `You are a macro trader. Here are active Polymarket markets:\n\n` +
     `${marketList}\n\n` +
-    `Find 15-20 causal chains where markets from DIFFERENT categories move together.\n\n` +
-    `The category tags [CONFLICT], [ENERGY], [MONETARY], [CRYPTO], [USPOLITICS], [CHINA], [EQUITIES], [ECONOMICS], [LEADERSHIP], [POLICY], [CURRENCY], [DIPLOMACY] show you what each market is about.\n\n` +
-    `A valid chain MUST connect two DIFFERENT category tags. Examples:\n` +
-    `- [CONFLICT] \u2192 [ENERGY]: Iran invasion disrupts Hormuz, oil spikes \u2705\n` +
-    `- [MONETARY] \u2192 [CRYPTO]: Fed holds rates, Bitcoin drops \u2705\n` +
-    `- [USPOLITICS] \u2192 [POLICY]: Democrats win Senate, climate bill passes \u2705\n` +
-    `- [CHINA] \u2192 [ECONOMICS]: Trump tariffs on China, US recession risk rises \u2705\n` +
-    `- [LEADERSHIP] \u2192 [DIPLOMACY]: Netanyahu removed, Gaza ceasefire possible \u2705\n` +
-    `- [CONFLICT] \u2192 [LEADERSHIP]: Iran regime falls, Netanyahu threat removed \u2705\n` +
-    `- [MONETARY] \u2192 [EQUITIES]: Fed cuts rates, S&P rallies \u2705\n` +
-    `- [CHINA] \u2192 [DIPLOMACY]: China invades Taiwan, Trump-Xi summit impossible \u2705\n` +
-    `- [ENERGY] \u2192 [MONETARY]: Oil spikes cause inflation, Fed delays cuts \u2705\n` +
-    `- [CONFLICT] \u2192 [CURRENCY]: War escalates, dollar strengthens as safe haven \u2705\n` +
-    `- [ECONOMICS] \u2192 [MONETARY]: Recession hits, Fed forced to cut rates \u2705\n` +
-    `- [USPOLITICS] \u2192 [ECONOMICS]: Republicans win Congress, tax cuts extend \u2705\n\n` +
-    `STEP 1: Find potential causal groups across different categories.\n\n` +
-    `STEP 2: For each group, ask yourself these exact questions:\n` +
-    `- "If market A moves 10%, would market B AUTOMATICALLY reprice within 24 hours?"\n` +
-    `- "Is there a direct financial/political mechanism \u2014 not a story, a mechanism?"\n` +
-    `- "Would a Bloomberg terminal show these as correlated assets?"\n\n` +
-    `STEP 3: Score each chain:\n` +
-    `Score 3 = DIRECT (include):\n` +
-    `  Fed raises rates \u2192 Treasury yields rise (immediate automatic mechanism)\n` +
-    `  Iran invades \u2192 Oil spikes (immediate supply disruption)\n` +
-    `  Democrats win Senate \u2192 specific bill can pass (direct vote count)\n\n` +
-    `Score 2 = INDIRECT (exclude):\n` +
-    `  Iran conflict \u2192 Bitcoin drops (requires: war \u2192 risk off \u2192 crypto sells \u2192 multiple steps)\n` +
-    `  Oil spikes \u2192 Tech stocks fall (requires: oil \u2192 inflation \u2192 Fed \u2192 rates \u2192 multiples \u2192 stocks)\n\n` +
-    `Score 1 = STORY (exclude):\n` +
-    `  War \u2192 alien disclosure (pure narrative)\n` +
-    `  Oil crisis \u2192 Apple market cap (too many steps)\n\n` +
-    `ONLY return Score 3 chains. If fewer than 15 Score-3 chains exist in this data, return fewer. Quality over quantity.\n\n` +
-    `For each chain, write the mechanism as a single sentence starting with "BECAUSE" \u2014 if you cannot complete it cleanly in ONE step, it is Score 2 or lower and must be excluded.\n\n` +
-    `Valid BECAUSE sentences:\n` +
-    `- "BECAUSE Hormuz carries 20% of global oil and invasion would close it immediately"\n` +
-    `- "BECAUSE Senate majority directly controls which bills get a vote"\n` +
-    `- "BECAUSE Fed rate decisions immediately reprice the risk-free rate that Bitcoin competes against"\n\n` +
-    `Invalid BECAUSE sentences (exclude these):\n` +
-    `- "BECAUSE war creates uncertainty which affects sentiment which affects crypto" (multiple steps)\n` +
-    `- "BECAUSE oil inflation might cause Fed to hold which might hurt tech multiples" (speculative)\n` +
-    `- "BECAUSE regime change is a foreign policy win which might boost VP reputation" (story)\n\n` +
-    `Same-category pairs are ALWAYS Score 2 or lower \u2014 never include them:\n` +
-    `- [CONFLICT] \u2192 [CONFLICT], [ENERGY] \u2192 [ENERGY], [MONETARY] \u2192 [MONETARY] \u274c\n` +
-    `- [CONFLICT] \u2192 [CRYPTO] or [ENERGY] \u2192 [CRYPTO]: too indirect \u274c\n\n` +
-    `Only use indices that exist in the list (0\u2013${maxIdx}). Minimum 2 markets per side.\n` +
-    `Specifically look for: USPOLITICS\u2192POLICY, LEADERSHIP\u2192DIPLOMACY, CHINA\u2192ECONOMICS, MONETARY\u2192EQUITIES chains.\n\n` +
-    `Return ONLY JSON array, zero other text:\n` +
+    `Find 20 groups where markets from DIFFERENT categories are causally connected.\n` +
+    `One side is the CAUSE, the other side is the EFFECT.\n` +
+    `Each side needs minimum 2 markets.\n` +
+    `Different categories means: conflict \u2260 energy \u2260 monetary \u2260 crypto \u2260 uspolitics \u2260 policy \u2260 economics \u2260 leadership \u2260 diplomacy\n\n` +
+    `Examples of valid cross-category pairs:\n` +
+    `- [CONFLICT] \u2192 [ENERGY]: invasion closes Hormuz, oil spikes\n` +
+    `- [MONETARY] \u2192 [CRYPTO]: Fed holds rates, Bitcoin drops\n` +
+    `- [USPOLITICS] \u2192 [POLICY]: Democrats win Senate, climate bill passes\n` +
+    `- [CHINA] \u2192 [ECONOMICS]: tariffs on China, US recession risk rises\n` +
+    `- [LEADERSHIP] \u2192 [DIPLOMACY]: Netanyahu removed, ceasefire possible\n` +
+    `- [MONETARY] \u2192 [EQUITIES]: Fed cuts, S&P rallies\n` +
+    `- [CONFLICT] \u2192 [CURRENCY]: war escalates, dollar strengthens\n` +
+    `- [ECONOMICS] \u2192 [MONETARY]: recession hits, Fed forced to cut\n\n` +
+    `Only use indices that exist in the list above (0\u2013${markets.length - 1}).\n\n` +
+    `Return ONLY JSON:\n` +
     `[\n` +
     `  {\n` +
     `    "theme": "Cause \u2192 Effect",\n` +
     `    "emoji": "emoji",\n` +
-    `    "because": "BECAUSE [single step direct mechanism]",\n` +
-    `    "description": "One sentence direct mechanism",\n` +
-    `    "score": 3,\n` +
-    `    "sideA_label": "CAUSE LABEL",\n` +
-    `    "sideA_category": "conflict",\n` +
-    `    "sideA_indices": [3, 7, 12],\n` +
-    `    "sideB_label": "EFFECT LABEL",\n` +
-    `    "sideB_category": "energy",\n` +
-    `    "sideB_indices": [45, 67]\n` +
+    `    "description": "one sentence",\n` +
+    `    "sideA_label": "CAUSE",\n` +
+    `    "sideA_indices": [3, 7],\n` +
+    `    "sideB_label": "EFFECT",\n` +
+    `    "sideB_indices": [12, 15]\n` +
     `  }\n` +
     `]`
   );
 }
 
-// ── Post-filter one Claude chain response ─────────────────────────────────────
-function filterChain(chain: any, markets: GammaMarket[]): CrossChain | null {
-  const groupA: ChainMarket[] = (chain.sideA_indices || [])
-    .filter((i: number) => Number.isInteger(i) && i >= 0 && i < markets.length)
-    .map((i: number) => enrichMarket(markets[i]))
-    .filter((m: ChainMarket | null): m is ChainMarket => m !== null);
-
-  const groupB: ChainMarket[] = (chain.sideB_indices || [])
-    .filter((i: number) => Number.isInteger(i) && i >= 0 && i < markets.length)
-    .map((i: number) => enrichMarket(markets[i]))
-    .filter((m: ChainMarket | null): m is ChainMarket => m !== null);
-
-  if (groupA.length < 2 || groupB.length < 2) {
-    console.log("Rejected — not enough markets:", chain.theme);
-    return null;
-  }
-
-  // Reject chains Claude itself scored below 3
-  if (typeof chain.score === "number" && chain.score < 3) {
-    console.log("Rejected score <3:", chain.theme, `(score: ${chain.score})`);
-    return null;
-  }
-
-  // Reject chains whose BECAUSE sentence contains multi-step red-flag words
-  const because = (chain.because || "").toLowerCase();
-  if (because) {
-    const RED_FLAGS = [
-      "might", "could", "sentiment", "uncertainty",
-      "reputation", "perception", "narrative",
-      "indirectly", "eventually", "over time", " years",
-      "boost", "popularity", "fears", "concerns",
-    ];
-    const flagged = RED_FLAGS.find(f => because.includes(f));
-    if (flagged) {
-      console.log(`Rejected red-flag BECAUSE ("${flagged}"):`, chain.theme, "|", because);
-      return null;
-    }
-  }
-
-  // Reject same category on both sides
-  const catA = (chain.sideA_category || "").toLowerCase();
-  const catB = (chain.sideB_category || "").toLowerCase();
-  if (catA && catB && catA === catB) {
-    console.log("Rejected same category:", chain.theme, `(${catA})`);
-    return null;
-  }
-
-  const textA = groupA.map(m => m.question.toLowerCase()).join(" ");
-  const textB = groupB.map(m => m.question.toLowerCase()).join(" ");
-  const allText = textA + " " + textB;
-  const desc = (chain.description || "").toLowerCase();
-
-  // Hard reject: sports noise
-  const SPORTS_KW = [" vs ", " vs. ", " @ ", "win on 2026", "win on 2025", "nba", "nfl",
-    "nhl", "mlb", "soccer", "football match", "basketball", "hockey game",
-    "champions league", "premier league", "world cup", "super bowl",
-    "drivers champion", "game handicap", "o/u ", "over/under", "eurovision"];
-  if (SPORTS_KW.some(kw => allText.includes(kw))) return null;
-
-  // Hard reject: alien/UFO
-  if (allText.includes("alien") || allText.includes("ufo") || allText.includes("non-human")) return null;
-
-  // Hard reject: tweet-counting
-  if (allText.includes("tweets from") || allText.includes("post 2") ||
-    allText.includes("post 3") || allText.includes("post 4")) return null;
-
-  // Hard reject: conflict/energy → crypto (too indirect)
-  const hasConflictA = textA.includes("iran") || textA.includes("invade") ||
-    textA.includes("military") || textA.includes("ceasefire") || textA.includes("war");
-  const hasEnergyA = textA.includes("crude oil") || textA.includes("oil price") || textA.includes("brent");
-  const hasCryptoB = textB.includes("bitcoin") || textB.includes("ethereum") ||
-    textB.includes("crypto") || textB.includes("xrp");
-  if ((hasConflictA || hasEnergyA) && hasCryptoB) {
-    console.log("Rejected conflict/energy→crypto:", chain.theme);
-    return null;
-  }
-
-  // Hard reject: speculative framing
-  if (desc.includes("tests whether") || desc.includes("safe haven test")) {
-    console.log("Rejected speculative framing:", chain.theme);
-    return null;
-  }
-
-  // Hard reject: war + market cap (no direct mechanism)
-  const hasWar = allText.includes("invade") || allText.includes("forces enter");
-  const hasMarketCap = allText.includes("largest company") || allText.includes("market cap");
-  if (hasWar && hasMarketCap) return null;
-
-  // Hard reject: circular oil↔Fed
-  if (textA.includes("crude oil") && textB.includes(" fed ")) return null;
-  if (textA.includes(" fed ") && textB.includes("crude oil")) return null;
-
-  const allMkts = [...groupA, ...groupB];
-  const totalVolume = allMkts.reduce((s, m) => s + parseFloat((m.volume24hr || 0) as any), 0);
-
-  return {
-    theme: chain.theme || "Causal Chain",
-    description: chain.description || "",
-    emoji: chain.emoji || "\uD83D\uDD17",
-    groupALabel: chain.sideA_label || "CAUSE",
-    groupBLabel: chain.sideB_label || "EFFECT",
-    groupA,
-    groupB,
-    totalVolume,
-    source: "ai" as const,
-  };
+// ── CALL 2 prompt: strict validator — sees real question text ──────────────────
+function buildValidatePrompt(chainDescriptions: string, count: number): string {
+  return (
+    `You are validating causal relationships between prediction markets.\n\n` +
+    `For each group below, answer: is the causal link DIRECT (one step) or INDIRECT (multiple steps)?\n\n` +
+    `DIRECT examples (keep these):\n` +
+    `- Iran invades \u2192 oil spikes: DIRECT because Hormuz closure immediately removes supply\n` +
+    `- Fed holds rates \u2192 Bitcoin drops: DIRECT because risk-free rate immediately competes with crypto\n` +
+    `- Democrats win Senate \u2192 bill passes: DIRECT because votes directly determine legislation\n` +
+    `- Ukraine ceasefire \u2192 gas prices drop: DIRECT because pipelines immediately reopen\n\n` +
+    `INDIRECT examples (reject these):\n` +
+    `- Iran conflict \u2192 Bitcoin: INDIRECT (war \u2192 sentiment \u2192 risk off \u2192 crypto, too many steps)\n` +
+    `- Oil spike \u2192 tech stocks: INDIRECT (oil \u2192 inflation \u2192 Fed \u2192 rates \u2192 multiples \u2192 stocks)\n` +
+    `- Regime falls \u2192 2028 election: INDIRECT (regime \u2192 foreign policy win \u2192 popularity \u2192 election 2 years later)\n` +
+    `- War \u2192 market cap of Apple: INDIRECT (no direct mechanism)\n\n` +
+    `Here are the ${count} groups to validate:\n` +
+    `${chainDescriptions}\n\n` +
+    `Return ONLY a JSON array of index numbers to KEEP (direct chains only). Example: [0, 2, 5, 7]\n` +
+    `Only include indices of chains with a genuine one-step causal mechanism.`
+  );
 }
 
-// ── Parse Claude response → CrossChain[] ─────────────────────────────────────
-function parseChainsFromResponse(data: any, markets: GammaMarket[]): CrossChain[] {
+// ── Basic noise filter (sports, UFO, tweets) — applied after Call 1 ───────────
+function isNoisy(markets: GammaMarket[]): boolean {
+  const text = markets.map(m => m.question.toLowerCase()).join(" ");
+  const NOISE = [" vs ", " vs. ", "win on 2026", "win on 2025", "nba", "nfl", "nhl", "mlb",
+    "champions league", "premier league", "world cup", "super bowl", "eurovision",
+    "drivers champion", "game handicap", "o/u ", "over/under", "alien", "ufo",
+    "non-human", "tweets from", "post 2", "post 3"];
+  return NOISE.some(kw => text.includes(kw));
+}
+
+// ── Parse JSON from Claude response ──────────────────────────────────────────
+function parseJson<T>(text: string): T | null {
   try {
-    const text: string = data?.content?.[0]?.text ?? "[]";
-    console.log("Claude raw response start:", text.substring(0, 300));
     const clean = text.replace(/```json|```/g, "").trim();
     const start = clean.indexOf("[");
     const end = clean.lastIndexOf("]");
-    if (start === -1 || end === -1) return [];
-    const aiChains: any[] = JSON.parse(clean.slice(start, end + 1));
-    console.log("Raw chains from Claude:", aiChains.length);
-    return aiChains.map(c => filterChain(c, markets)).filter((c): c is CrossChain => c !== null);
-  } catch (e) {
-    console.error("JSON parse failed:", e);
-    return [];
+    if (start === -1 || end === -1) return null;
+    return JSON.parse(clean.slice(start, end + 1)) as T;
+  } catch {
+    return null;
   }
 }
 
-// ── Fetch AI chains: category-diverse selection → one Claude call ─────────────
+// ── Fetch AI chains: two sequential Claude calls ──────────────────────────────
 async function fetchAiChains(allMarkets: GammaMarket[]): Promise<CrossChain[]> {
-  // Filter to uncertain, active markets with real volume
   const meaningful = allMarkets.filter(m => {
     try {
       const yes = parseFloat(JSON.parse(m.outcomePrices || '["0.5"]')[0]);
@@ -422,63 +310,125 @@ async function fetchAiChains(allMarkets: GammaMarket[]): Promise<CrossChain[]> {
     } catch { return false; }
   });
 
-  // Build diverse set: top 15 per category instead of top 200 by volume
   const diverseSet = buildDiverseSet(meaningful);
   if (diverseSet.length < 20) return [];
 
-  console.log("Sending", diverseSet.length, "markets to Claude (category-diverse)");
-
-  const response = await fetch(`${BASE}/api/polymarket/claude`, {
+  // ── CALL 1: Find chains (liberal) ──────────────────────────────────────────
+  console.log("Call 1: finding chains across", diverseSet.length, "markets");
+  const findRes = await fetch(`${BASE}/api/polymarket/claude`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       model: "claude-sonnet-4-5",
       max_tokens: 8000,
-      messages: [{ role: "user", content: buildChainPrompt(diverseSet) }],
+      messages: [{ role: "user", content: buildFindPrompt(diverseSet) }],
     }),
   });
+  if (!findRes.ok) { console.error("Call 1 HTTP error:", findRes.status); return []; }
+  const findData = await findRes.json();
+  if (findData.error) { console.error("Call 1 API error:", findData.error); return []; }
 
-  if (!response.ok) {
-    console.error("Claude API HTTP error:", response.status);
-    return [];
+  const rawText = findData?.content?.[0]?.text ?? "[]";
+  console.log("Call 1 response start:", rawText.substring(0, 200));
+  const rawChains = parseJson<any[]>(rawText);
+  if (!rawChains) { console.error("Call 1 JSON parse failed"); return []; }
+  console.log("Call 1 found", rawChains.length, "raw chains");
+
+  // Resolve indices → market objects, apply basic noise filter
+  const chainObjects: RawChain[] = [];
+  for (const chain of rawChains) {
+    const sideAMarkets = ((chain.sideA_indices || []) as number[])
+      .filter(i => Number.isInteger(i) && i >= 0 && i < diverseSet.length)
+      .map(i => diverseSet[i])
+      .filter((m): m is GammaMarket => Boolean(m));
+    const sideBMarkets = ((chain.sideB_indices || []) as number[])
+      .filter(i => Number.isInteger(i) && i >= 0 && i < diverseSet.length)
+      .map(i => diverseSet[i])
+      .filter((m): m is GammaMarket => Boolean(m));
+    if (sideAMarkets.length < 2 || sideBMarkets.length < 2) continue;
+    if (isNoisy([...sideAMarkets, ...sideBMarkets])) continue;
+    chainObjects.push({
+      theme: String(chain.theme || ""),
+      emoji: chain.emoji ? String(chain.emoji) : undefined,
+      description: chain.description ? String(chain.description) : undefined,
+      sideA_label: chain.sideA_label ? String(chain.sideA_label) : undefined,
+      sideB_label: chain.sideB_label ? String(chain.sideB_label) : undefined,
+      sideAMarkets,
+      sideBMarkets,
+    });
   }
-  const data = await response.json();
-  if (data.error) {
-    console.error("Claude API error:", JSON.stringify(data.error));
-    return [];
-  }
 
-  const chains = parseChainsFromResponse(data, diverseSet);
-  console.log("Valid chains after filtering:", chains.length);
+  if (chainObjects.length === 0) { console.log("No chains survived noise filter"); return []; }
+  console.log("After noise filter:", chainObjects.length, "chains");
 
-  // ── Phase 1: market-reuse deduplication ──────────────────────────────────
-  const usedSideAMarkets = new Set<string>();
-  const usedSideBMarkets = new Set<string>();
+  // ── CALL 2: Validate chains (strict) ─────────────────────────────────────
+  const chainDescriptions = chainObjects.map((c, i) =>
+    `${i}. THEME: ${c.theme}\n` +
+    `   CAUSE MARKETS: ${c.sideAMarkets.map(m => `"${m.question}"`).join(", ")}\n` +
+    `   EFFECT MARKETS: ${c.sideBMarkets.map(m => `"${m.question}"`).join(", ")}`
+  ).join("\n\n");
 
-  const deduped = chains
-    .sort((a, b) => b.totalVolume - a.totalVolume)
+  console.log("Call 2: validating", chainObjects.length, "chains");
+  const validateRes = await fetch(`${BASE}/api/polymarket/claude`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: "claude-sonnet-4-5",
+      max_tokens: 2000,
+      messages: [{ role: "user", content: buildValidatePrompt(chainDescriptions, chainObjects.length) }],
+    }),
+  });
+  if (!validateRes.ok) { console.error("Call 2 HTTP error:", validateRes.status); return []; }
+  const validateData = await validateRes.json();
+  if (validateData.error) { console.error("Call 2 API error:", validateData.error); return []; }
+
+  const keepText = validateData?.content?.[0]?.text ?? "[]";
+  console.log("Call 2 keeping indices:", keepText.substring(0, 200));
+  const keepIndices = parseJson<number[]>(keepText);
+  if (!keepIndices) { console.error("Call 2 JSON parse failed"); return []; }
+  console.log("Call 2 approved", keepIndices.length, "chains:", keepIndices);
+
+  // ── Build final CrossChain[] from kept indices ─────────────────────────────
+  const usedSideA = new Set<string>();
+  const usedSideB = new Set<string>();
+
+  const deduped = keepIndices
+    .filter(i => Number.isInteger(i) && i >= 0 && i < chainObjects.length)
+    .map(i => chainObjects[i])
     .filter(chain => {
-      const sideAIds = chain.groupA.map(m => m.conditionId);
-      const sideBIds = chain.groupB.map(m => m.conditionId);
-      const sideAOverlap = sideAIds.filter(id => usedSideAMarkets.has(id)).length;
-      const sideBOverlap = sideBIds.filter(id => usedSideBMarkets.has(id)).length;
-      if (sideAOverlap > sideAIds.length * 0.6) return false;
-      if (sideBOverlap > sideBIds.length * 0.6) return false;
-      sideAIds.forEach(id => usedSideAMarkets.add(id));
-      sideBIds.forEach(id => usedSideBMarkets.add(id));
+      const sideAIds = chain.sideAMarkets.map(m => m.conditionId);
+      const sideBIds = chain.sideBMarkets.map(m => m.conditionId);
+      const sideAOverlap = sideAIds.filter(id => usedSideA.has(id)).length;
+      const sideBOverlap = sideBIds.filter(id => usedSideB.has(id)).length;
+      if (sideAOverlap > sideAIds.length * 0.5) return false;
+      if (sideBOverlap > sideBIds.length * 0.5) return false;
+      sideAIds.forEach(id => usedSideA.add(id));
+      sideBIds.forEach(id => usedSideB.add(id));
       return true;
     });
 
-  // ── Phase 2: deduplicate by identical sideA market set ───────────────────
-  const seenSideA = new Set<string>();
-  return deduped
-    .filter(chain => {
-      const key = chain.groupA.map(m => m.conditionId).sort().join(",");
-      if (seenSideA.has(key)) return false;
-      seenSideA.add(key);
-      return true;
-    })
-    .slice(0, 20);
+  const finalChains: CrossChain[] = [];
+  for (const chain of deduped) {
+    const allMkts = [...chain.sideAMarkets, ...chain.sideBMarkets];
+    const totalVolume = allMkts.reduce((s, m) => s + (parseFloat(m.volume24hr as any) || 0), 0);
+    const groupA = chain.sideAMarkets.map(enrichMarket).filter((m): m is ChainMarket => m !== null);
+    const groupB = chain.sideBMarkets.map(enrichMarket).filter((m): m is ChainMarket => m !== null);
+    if (groupA.length < 2 || groupB.length < 2) continue;
+    finalChains.push({
+      theme: chain.theme || "Causal Chain",
+      description: chain.description || "",
+      emoji: chain.emoji || "\uD83D\uDD17",
+      groupALabel: chain.sideA_label || "CAUSE",
+      groupBLabel: chain.sideB_label || "EFFECT",
+      groupA,
+      groupB,
+      totalVolume,
+      source: "ai" as const,
+    });
+  }
+
+  console.log("Final chains:", finalChains.length);
+  return finalChains.sort((a, b) => b.totalVolume - a.totalVolume).slice(0, 20);
 }
 
 // ── Cross-category causal chains — fully AI-driven ───────────────────────────

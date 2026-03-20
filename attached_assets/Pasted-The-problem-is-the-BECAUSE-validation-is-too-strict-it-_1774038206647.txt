@@ -1,0 +1,158 @@
+The problem is the BECAUSE validation is too strict — it's rejecting everything including valid chains, and Claude is only finding 1 chain that passes its own Score 3 test.
+
+The real issue is you're asking Claude to do two hard things at once: find chains AND validate them in the same prompt. It's getting confused and being overly conservative.
+
+Split it into two separate Claude calls:
+
+Tell your agent:
+
+---
+
+```javascript
+// CALL 1: Find chains (no scoring, just find)
+const findCall = await fetch('/proxy/claude', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    model: 'claude-sonnet-4-20250514',
+    max_tokens: 8000,
+    messages: [{
+      role: 'user',
+      content: `You are a macro trader. Here are active Polymarket markets:
+
+${marketList}
+
+Find 20 groups where markets from DIFFERENT categories are causally connected.
+One side is the CAUSE, other side is the EFFECT.
+Each side needs minimum 2 markets.
+Different categories means: conflict ≠ energy ≠ monetary ≠ crypto ≠ politics ≠ policy ≠ economics
+
+Return ONLY JSON:
+[
+  {
+    "theme": "Cause → Effect",
+    "emoji": "emoji",
+    "description": "one sentence",
+    "sideA_label": "CAUSE",
+    "sideA_indices": [3, 7],
+    "sideB_label": "EFFECT",
+    "sideB_indices": [12, 15]
+  }
+]`
+    }]
+  })
+})
+
+const findData = await findCall.json()
+const rawChains = JSON.parse(findData.content[0].text.replace(/```json|```/g, '').trim())
+
+// Convert indices to market objects immediately
+const chainObjects = rawChains.map(chain => {
+  const sideAMarkets = chain.sideA_indices
+    .filter(i => i >= 0 && i < finalSet.length)
+    .map(i => finalSet[i]).filter(Boolean)
+  const sideBMarkets = chain.sideB_indices
+    .filter(i => i >= 0 && i < finalSet.length)
+    .map(i => finalSet[i]).filter(Boolean)
+  if (sideAMarkets.length < 2 || sideBMarkets.length < 2) return null
+  return { ...chain, sideAMarkets, sideBMarkets }
+}).filter(Boolean)
+
+// CALL 2: Validate chains with a fresh perspective
+// Send Claude the actual market questions, not indices
+const chainDescriptions = chainObjects.map((c, i) => 
+  `${i}. THEME: ${c.theme}
+   CAUSE MARKETS: ${c.sideAMarkets.map(m => '"' + m.question + '"').join(', ')}
+   EFFECT MARKETS: ${c.sideBMarkets.map(m => '"' + m.question + '"').join(', ')}`
+).join('\n\n')
+
+const validateCall = await fetch('/proxy/claude', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    model: 'claude-sonnet-4-20250514',
+    max_tokens: 2000,
+    messages: [{
+      role: 'user',
+      content: `You are validating causal relationships between prediction markets.
+
+For each group below, answer: is the causal link DIRECT (one step) or INDIRECT (multiple steps)?
+
+DIRECT examples (keep these):
+- Iran invades → oil spikes: DIRECT because Hormuz closure immediately removes supply
+- Fed holds rates → Bitcoin drops: DIRECT because risk-free rate immediately competes with crypto
+- Democrats win Senate → bill passes: DIRECT because votes directly determine legislation
+- Ukraine ceasefire → gas prices drop: DIRECT because pipelines immediately reopen
+
+INDIRECT examples (reject these):
+- Iran conflict → Bitcoin: INDIRECT (war → sentiment → risk off → crypto, too many steps)
+- Oil spike → tech stocks: INDIRECT (oil → inflation → Fed → rates → multiples → stocks)
+- Regime falls → 2028 election: INDIRECT (regime → foreign policy win → popularity → election 2 years later)
+- War → market cap of Apple: INDIRECT (no direct mechanism)
+
+Here are the groups to validate:
+${chainDescriptions}
+
+Return ONLY a JSON array of indices to KEEP (direct chains only):
+[0, 2, 5, 7]
+
+Only include index numbers of chains that are genuinely direct one-step causal relationships.`
+    }]
+  })
+})
+
+const validateData = await validateCall.json()
+const keepText = validateData.content[0].text.replace(/```json|```/g, '').trim()
+const keepIndices = JSON.parse(keepText)
+
+console.log('Claude keeping chains at indices:', keepIndices)
+
+// Build final chains from kept indices
+const usedSideA = new Set()
+const usedSideB = new Set()
+
+const finalChains = keepIndices
+  .filter(i => i >= 0 && i < chainObjects.length)
+  .map(i => chainObjects[i])
+  .filter(chain => {
+    const sideAIds = chain.sideAMarkets.map(m => m.conditionId)
+    const sideBIds = chain.sideBMarkets.map(m => m.conditionId)
+    
+    // Prevent same markets dominating all chains
+    const sideAOverlap = sideAIds.filter(id => usedSideA.has(id)).length
+    const sideBOverlap = sideBIds.filter(id => usedSideB.has(id)).length
+    if (sideAOverlap > sideAIds.length * 0.5) return false
+    if (sideBOverlap > sideBIds.length * 0.5) return false
+    
+    sideAIds.forEach(id => usedSideA.add(id))
+    sideBIds.forEach(id => usedSideB.add(id))
+    return true
+  })
+  .map(chain => {
+    const allMkts = [...chain.sideAMarkets, ...chain.sideBMarkets]
+    const totalVol = allMkts.reduce((s, m) => 
+      s + parseFloat(m.volume24hr || 0), 0)
+    const movedMarkets = allMkts.filter(m =>
+      Math.abs(parseFloat(m.priceChange24h || 0)) > 0.03)
+    return {
+      theme: chain.theme,
+      emoji: chain.emoji || '🔗',
+      description: chain.description,
+      sideA: { label: chain.sideA_label, markets: chain.sideAMarkets },
+      sideB: { label: chain.sideB_label, markets: chain.sideBMarkets },
+      totalVol,
+      movedCount: movedMarkets.length,
+      hasMovement: movedMarkets.length > 0
+    }
+  })
+  .sort((a, b) => b.totalVol - a.totalVol)
+  .slice(0, 20)
+
+console.log('Final chains after validation:', finalChains.length)
+renderChains(finalChains)
+```
+
+Two separate calls fixes everything:
+- Call 1 is liberal — finds as many potential chains as possible without overthinking
+- Call 2 is strict — a fresh Claude instance with no prior context looks at the actual market questions and ruthlessly cuts indirect ones
+- The second call sees real question text not indices so it can actually reason about whether the mechanism is direct

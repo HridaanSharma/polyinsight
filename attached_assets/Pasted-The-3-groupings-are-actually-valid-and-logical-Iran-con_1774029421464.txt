@@ -1,0 +1,232 @@
+The 3 groupings are actually valid and logical. Iran conflict → Middle East stability ✅, Iran → Oil ✅, Fed → Bitcoin/XRP ✅. These are correct.
+
+The problem is not the quality of the prompt — it's that batches 2, 3, and 4 are probably failing silently or returning empty. Claude is only finding chains when markets from BOTH sides happen to be in the same batch of 50. If Iran markets are in batch 1 but oil markets are in batch 3, that chain never gets found.
+
+Tell your agent exactly this:
+
+---
+
+**The fix: stop splitting into separate batches. Send ALL 200 markets to Claude in ONE call but smarter:**
+
+```javascript
+const callClaude = async (markets) => {
+  // Instead of batches of 50, send all 200 at once
+  // But compress the market list to fit in context
+  const marketList = markets.map((m, i) => {
+    const yes = parseFloat(JSON.parse(m.outcomePrices)[0])
+    const vol = parseFloat(m.volume24hr)
+    const change = parseFloat(m.priceChange24h || 0)
+    // Compressed format to fit 200 markets in one prompt
+    return `${i}|${m.question}|${(yes*100).toFixed(0)}%|$${(vol/1000).toFixed(0)}K|${change > 0.03 ? '▲' : change < -0.03 ? '▼' : '='}`
+  }).join('\n')
+
+  const response = await fetch('/proxy/claude', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 8000,
+      messages: [{
+        role: 'user',
+        content: `You are a senior macro trader analyzing ALL active Polymarket prediction markets.
+
+Format: index|question|probability|24h_volume|price_direction
+
+Here are all ${markets.length} active markets right now:
+${marketList}
+
+Find 15-20 groups where markets from COMPLETELY DIFFERENT topics are causally connected in the real world. A trader betting on one should ALSO check the other.
+
+=== VALID CAUSAL CHAINS — USE THESE AS A TEMPLATE ===
+
+CONFLICT → COMMODITY (direct supply disruption):
+- "US invades Iran" (index X) + "Crude oil hits $100" (index Y) → Hormuz disruption spikes oil
+- "Iran ceasefire" (index X) + "Crude oil drops" (index Y) → ceasefire removes risk premium
+- "Ukraine ceasefire" (index X) + "European gas prices drop" (index Y) → pipelines reopen
+- "Russia attacks NATO" (index X) + "Gold hits $3000" (index Y) → war = flight to safety
+
+MONETARY POLICY → RISK ASSETS (direct rate mechanism):
+- "Fed holds rates" (index X) + "Bitcoin dips" (index Y) → high rates = risk off = crypto sells
+- "Fed cuts rates" (index X) + "Bitcoin rallies" (index Y) → rate cuts = risk on
+- "Fed holds rates" (index X) + "S&P500 drops" (index Y) → tight policy pressures equities
+- "Inflation stays high" (index X) + "Fed cuts rates" (index Y) → logically inconsistent pair
+
+POLITICS → POLICY (direct legislative path):
+- "Democrats win Senate" (index X) + "Climate bill passes" (index Y) → need Senate majority
+- "Republicans win House" (index X) + "Tax cuts extended" (index Y) → house controls budget
+- "Trump wins" (index X) + "US leaves Paris Agreement" (index Y) → direct executive action
+- "Midterm outcome" (index X) + "Specific bill passes" (index Y) → votes determine legislation
+
+TRADE POLICY → ECONOMICS (direct trade impact):
+- "Trump tariffs on China" (index X) + "China GDP below 4%" (index Y) → tariffs hurt exports directly
+- "US trade war" (index X) + "Recession 2026" (index Y) → trade disruption = slowdown
+- "Trump tariffs on EU" (index X) + "Euro weakens" (index Y) → trade war = currency pressure
+
+GEOPOLITICAL EVENT → DIPLOMACY (direct relationship impact):
+- "China invades Taiwan" (index X) + "Trump visits China" (index Y) → invasion ends diplomacy
+- "Iran regime falls" (index X) + "Netanyahu survives" (index Y) → removes his main threat
+- "Russia-Ukraine peace" (index X) + "NATO expansion" (index Y) → peace reshapes alliance
+- "North Korea test" (index X) + "US-China relations" (index Y) → shared threat = cooperation
+
+LEADERSHIP → POLICY (direct decision-making power):
+- "Netanyahu removed" (index X) + "Gaza ceasefire" (index Y) → new leader enables deal
+- "Putin leaves power" (index X) + "Ukraine ceasefire" (index Y) → new leader negotiates
+- "Iran leadership change" (index X) + "Iran nuclear deal" (index Y) → new leader reopens talks
+
+FINANCIAL → FINANCIAL (direct contagion):
+- "US debt ceiling crisis" (index X) + "Dollar index drops" (index Y) → default fear = dollar weakness
+- "US government shutdown" (index X) + "Market volatility" (index Y) → shutdown = uncertainty
+- "Banking crisis" (index X) + "Fed emergency cuts" (index Y) → crisis forces Fed hand
+
+=== NEVER DO THESE ===
+- Sports games (vs, @, win on 2026-) with ANYTHING
+- Elon tweets counting with ANYTHING  
+- Eurovision/F1/NBA/NHL/soccer championships with politics
+- UFO/alien markets with ANYTHING
+- Same topic on both sides: all Iran together, all Bitcoin together, all Fed together, all oil together
+- Iran conflict + Bitcoin (too many steps, not direct)
+- Any conflict + "market stability" (too vague)
+- Bitcoin price targets + Bitcoin price targets (same topic)
+
+=== RULES ===
+1. Both sides MUST be from different topics/categories
+2. Causal link must be ONE direct step — not A→C→D→B
+3. Each side needs minimum 2 markets
+4. Only use indices that actually exist in the list above
+5. Find AT LEAST 15 valid groups — scan the full list carefully
+6. Include chains from different topics — don't just find Iran chains
+7. Look across ALL 200 markets — elections, economics, tech, crypto, geopolitics, policy
+
+Return ONLY a JSON array. Zero other text:
+[
+  {
+    "theme": "Cause → Direct Effect",
+    "emoji": "one emoji",
+    "description": "One sentence: exact real-world mechanism",
+    "sideA_label": "CAUSE LABEL",
+    "sideA_indices": [3, 7, 12],
+    "sideB_label": "EFFECT LABEL",
+    "sideB_indices": [45, 67, 89]
+  }
+]`
+      }]
+    })
+  })
+
+  const data = await response.json()
+
+  if (!data.content?.[0]?.text) {
+    console.error('Claude API error:', JSON.stringify(data))
+    return []
+  }
+
+  const text = data.content[0].text.trim()
+  console.log('Claude found chains, raw start:', text.substring(0, 300))
+
+  let chains
+  try {
+    const clean = text.replace(/```json|```/g, '').trim()
+    chains = JSON.parse(clean)
+  } catch(e) {
+    console.error('JSON parse failed:', e, text.substring(0, 500))
+    return []
+  }
+
+  console.log('Raw chains from Claude:', chains.length)
+
+  return chains.map(chain => {
+    const sideAMarkets = (chain.sideA_indices || [])
+      .filter(i => Number.isInteger(i) && i >= 0 && i < markets.length)
+      .map(i => markets[i])
+      .filter(Boolean)
+
+    const sideBMarkets = (chain.sideB_indices || [])
+      .filter(i => Number.isInteger(i) && i >= 0 && i < markets.length)
+      .map(i => markets[i])
+      .filter(Boolean)
+
+    if (sideAMarkets.length < 2 || sideBMarkets.length < 2) {
+      console.log('Rejected — not enough markets:', chain.theme)
+      return null
+    }
+
+    const sideAText = sideAMarkets.map(m => m.question.toLowerCase()).join(' ')
+    const sideBText = sideBMarkets.map(m => m.question.toLowerCase()).join(' ')
+    const allText = sideAText + ' ' + sideBText
+
+    // Reject same-topic
+    const sameTopicWords = [
+      ['iran', 'iran'],
+      ['bitcoin', 'bitcoin'],
+      ['crude oil', 'crude oil'],
+      ['federal reserve', 'federal reserve'],
+      ['fed rate', 'fed rate'],
+      ['israel', 'israel'],
+      ['ukraine', 'ukraine'],
+      ['taiwan', 'taiwan'],
+      ['ethereum', 'ethereum'],
+      ['election', 'election'],
+      ['oil (cl)', 'oil (cl)']
+    ]
+
+    for (const [topicA, topicB] of sameTopicWords) {
+      if (sideAText.includes(topicA) && sideBText.includes(topicB)) {
+        console.log('Rejected same-topic:', chain.theme, '| topic:', topicA)
+        return null
+      }
+    }
+
+    // Reject sports/noise
+    const noiseWords = [
+      ' vs ', ' vs. ', 'tweets from', 'o/u ',
+      'win on 2026', 'win on 2025', 'eurovision',
+      'drivers champion', 'alien', 'ufo',
+      'game handicap', 'spread:', 'over/under'
+    ]
+    if (noiseWords.some(kw => allText.includes(kw))) {
+      console.log('Rejected noise:', chain.theme)
+      return null
+    }
+
+    const allMkts = [...sideAMarkets, ...sideBMarkets]
+    const totalVol = allMkts.reduce((s, m) =>
+      s + parseFloat(m.volume24hr || 0), 0)
+
+    const movedMarkets = allMkts.filter(m =>
+      Math.abs(parseFloat(m.priceChange24h || 0)) > 0.03
+    )
+
+    return {
+      theme: chain.theme,
+      emoji: chain.emoji || '🔗',
+      description: chain.description,
+      sideA: { label: chain.sideA_label, markets: sideAMarkets },
+      sideB: { label: chain.sideB_label, markets: sideBMarkets },
+      totalVol,
+      movedCount: movedMarkets.length,
+      hasMovement: movedMarkets.length > 0
+    }
+  }).filter(Boolean)
+}
+
+// CALL IT — one single Claude call with all 200 markets
+const allChains = await callClaude(top200)
+
+console.log('Valid chains after filtering:', allChains.length)
+
+const finalChains = allChains
+  .filter((c, i, arr) =>
+    arr.findIndex(x => x.theme === c.theme) === i
+  )
+  .sort((a, b) => b.totalVol - a.totalVol)
+  .slice(0, 25)
+
+renderChains(finalChains)
+```
+
+**Key changes:**
+- Removed 4 separate batches — now ONE call with all 200 markets
+- Markets in different batches were never compared against each other — that's why only 3 chains were found
+- Compressed market format so 200 markets fit in one prompt
+- Increased `max_tokens` to 8000 so Claude has room to return 15-20 chains
+- Added console logs so you can see exactly what Claude returns and why chains get rejected

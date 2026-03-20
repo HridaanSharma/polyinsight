@@ -125,128 +125,116 @@ export function useAllMarkets() {
   });
 }
 
-// ── Build Claude prompt for a batch of markets ───────────────────────────────
-function buildChainPrompt(batch: GammaMarket[], offset: number): string {
-  const marketList = batch
-    .map((m, i) => {
-      const yes = parseFloat(JSON.parse(m.outcomePrices || '["0.5"]')[0]);
-      const vol = parseFloat(m.volume24hr as any) || 0;
-      const change = parseFloat((m.oneDayPriceChange ?? m.priceChange ?? 0) as any) || 0;
-      return `${offset + i}. "${m.question}" | YES:${(yes * 100).toFixed(1)}% | Vol:$${(vol / 1000).toFixed(0)}K | 24hChange:${(change * 100).toFixed(1)}%`;
-    })
-    .join("\n");
+// ── Build single Claude prompt — all 200 markets, compressed pipe format ──────
+function buildChainPrompt(markets: GammaMarket[]): string {
+  const lines = markets.map((m, i) => {
+    const yes = parseFloat(JSON.parse(m.outcomePrices || '["0.5"]')[0]);
+    const vol = parseFloat(m.volume24hr as any) || 0;
+    const change = parseFloat((m.oneDayPriceChange ?? m.priceChange ?? 0) as any) || 0;
+    const dir = change > 0.03 ? "\u25b2" : change < -0.03 ? "\u25bc" : "=";
+    return `${i}|${m.question}|${(yes * 100).toFixed(0)}%|$${(vol / 1000).toFixed(0)}K|${dir}`;
+  });
+  const marketList = lines.join("\n");
+  const maxIdx = markets.length - 1;
 
-  return `You are a senior macro trader and political analyst. You are looking at LIVE Polymarket prediction markets.
-
-Here are ${batch.length} active markets (indices ${offset}–${offset + batch.length - 1}):
-${marketList}
-
-YOUR TASK: Find pairs or groups of markets from COMPLETELY DIFFERENT topics that are causally connected. A trader betting on one of these should ALSO be looking at the other.
-
-=== WHAT WE WANT: CROSS-TOPIC CAUSAL CHAINS ===
-
-The value is finding markets from different sections of Polymarket that move together in real life but are listed separately on the platform. A trader seeing only one side is missing the full picture.
-
-=== MANY EXAMPLES OF VALID CHAINS ===
-
-CONFLICT → COMMODITY:
-- "US invades Iran" + "Crude oil hits $100" → invasion disrupts Hormuz, oil spikes immediately
-- "Iran ceasefire signed" + "Crude oil below $80" → ceasefire removes risk premium, oil drops
-- "Ukraine ceasefire" + "European natural gas below $X" → war end restores pipeline supply
-- "Israel attacks Lebanon" + "Oil above $100" → Middle East escalation = supply fear
-
-MONETARY POLICY → ASSET PRICES:
-- "Fed holds rates in April" + "Bitcoin dips to $X" → high rates = risk-off = crypto sells
-- "Fed cuts rates" + "Bitcoin reaches $X" → rate cuts = risk-on = crypto rallies
-- "Fed holds rates" + "S&P500 drops" → tight policy pressures equities
-- "US inflation above 3%" + "Fed cuts rates" → these are logically inconsistent if both high
-
-POLITICS → POLICY OUTCOMES:
-- "Democrats win Senate majority" + "Climate bill passes" → need Senate to pass legislation
-- "Republicans win House" + "Tax cuts extended" → house controls budget legislation
-- "Trump wins election" + "US rejoins Paris Agreement" → opposite directions
-- "Democrats win Senate" + "Minimum wage increase" → direct legislative path
-
-TRADE POLICY → ECONOMICS:
-- "Trump imposes 25% tariffs on China" + "China GDP growth below 4%" → tariffs directly hurt Chinese exports
-- "Trump tariffs on EU" + "Euro weakens against dollar" → trade war = currency pressure
-- "US trade war escalates" + "Recession by 2026" → trade disruption = economic slowdown
-
-GEOPOLITICAL → DIPLOMATIC:
-- "China invades Taiwan" + "Trump visits China" → invasion makes diplomatic visit impossible
-- "Iran regime falls" + "Netanyahu survives politically" → Iran collapse removes his main threat
-- "Russia-Ukraine ceasefire" + "NATO expands" → peace changes alliance dynamics
-- "North Korea nuclear test" + "US-China relations improve" → shared threat can unite rivals
-
-LEADERSHIP → MARKET:
-- "Putin leaves power" + "Ukraine ceasefire" → new Russian leader might negotiate
-- "Netanyahu removed" + "Israel-Gaza ceasefire" → leadership change enables deal
-- "Iran leadership change" + "Iran nuclear deal" → new leader could reopen negotiations
-
-FINANCIAL CONTAGION:
-- "US debt ceiling crisis" + "Dollar index drops" → default fear weakens dollar
-- "US government shutdown" + "S&P500 drops" → shutdown = economic uncertainty
-- "Argentina defaults" + "Emerging market ETF drops" → contagion effect
-
-=== WHAT TO ABSOLUTELY NEVER DO ===
-
-NEVER group these — they are always wrong:
-- Sports games (basketball, soccer, hockey, baseball) with ANYTHING political or financial
-- Elon Musk tweet counting with ANYTHING
-- Eurovision/F1/sports championships with geopolitics
-- UFO/alien disclosure with anything
-- Multiple Bitcoin price targets together (same topic)
-- Multiple Iran markets together (same topic)
-- Multiple Fed rate markets together (same topic)
-- Multiple oil price targets together (same topic)
-- "Iran conflict" + "Bitcoin" — too many steps between them, not direct
-- "War" + "stock market" — too vague, not a direct single-step mechanism
-
-=== VALIDATION CHECKLIST ===
-Before including any group, verify:
-✓ Are the two sides from genuinely different topics? (conflict ≠ commodity ≠ politics ≠ policy)
-✓ Is there ONE direct real-world mechanism connecting them?
-✓ Would a trader on side A DIRECTLY care about side B?
-✓ Are ALL indices valid numbers that exist in the list above (${offset}–${offset + batch.length - 1})?
-✓ Does each side have at least 2 markets?
-
-Return ONLY a JSON array. No explanation. No markdown. No extra text. Just the JSON:
-[
-  {
-    "theme": "Specific Cause → Specific Direct Effect",
-    "emoji": "one relevant emoji",
-    "description": "One sentence: the exact real-world mechanism",
-    "sideA_label": "CAUSE IN CAPS (3-4 words)",
-    "sideA_indices": [${offset}, ${offset + 3}],
-    "sideB_label": "EFFECT IN CAPS (3-4 words)",
-    "sideB_indices": [${offset + 12}, ${offset + 20}]
-  }
-]`;
+  return (
+    `You are a senior macro trader analyzing ALL active Polymarket prediction markets.\n` +
+    `\n` +
+    `Format: index|question|probability|24h_volume|price_direction (\u25b2=up >3%, \u25bc=down >3%, ==flat)\n` +
+    `\n` +
+    `Here are all ${markets.length} active markets right now:\n` +
+    `${marketList}\n` +
+    `\n` +
+    `Find 15-20 groups where markets from COMPLETELY DIFFERENT topics are causally connected in the real world. A trader betting on one should ALSO check the other.\n` +
+    `\n` +
+    `=== VALID CAUSAL CHAINS ===\n` +
+    `\n` +
+    `CONFLICT \u2192 COMMODITY (direct supply disruption):\n` +
+    `- "US invades Iran" + "Crude oil hits $100" \u2192 Hormuz disruption spikes oil\n` +
+    `- "Iran ceasefire" + "Crude oil drops" \u2192 ceasefire removes risk premium\n` +
+    `- "Ukraine ceasefire" + "European gas prices drop" \u2192 pipelines reopen\n` +
+    `- "Russia attacks NATO" + "Gold hits $3000" \u2192 war = flight to safety\n` +
+    `\n` +
+    `MONETARY POLICY \u2192 RISK ASSETS (direct rate mechanism):\n` +
+    `- "Fed holds rates" + "Bitcoin dips" \u2192 high rates = risk off = crypto sells\n` +
+    `- "Fed cuts rates" + "Bitcoin rallies" \u2192 rate cuts = risk on\n` +
+    `- "Fed holds rates" + "S&P500 drops" \u2192 tight policy pressures equities\n` +
+    `- "Inflation stays high" + "Fed cuts rates" \u2192 logically inconsistent pair\n` +
+    `\n` +
+    `POLITICS \u2192 POLICY (direct legislative path):\n` +
+    `- "Democrats win Senate" + "Climate bill passes" \u2192 need Senate majority\n` +
+    `- "Republicans win House" + "Tax cuts extended" \u2192 house controls budget\n` +
+    `- "Trump wins" + "US leaves Paris Agreement" \u2192 direct executive action\n` +
+    `\n` +
+    `TRADE POLICY \u2192 ECONOMICS (direct trade impact):\n` +
+    `- "Trump tariffs on China" + "China GDP below 4%" \u2192 tariffs hurt exports directly\n` +
+    `- "US trade war" + "Recession 2026" \u2192 trade disruption = slowdown\n` +
+    `- "Trump tariffs on EU" + "Euro weakens" \u2192 trade war = currency pressure\n` +
+    `\n` +
+    `GEOPOLITICAL EVENT \u2192 DIPLOMACY (direct relationship impact):\n` +
+    `- "China invades Taiwan" + "Trump visits China" \u2192 invasion ends diplomacy\n` +
+    `- "Iran regime falls" + "Netanyahu survives" \u2192 removes his main threat\n` +
+    `- "Russia-Ukraine peace" + "NATO expansion" \u2192 peace reshapes alliance\n` +
+    `\n` +
+    `LEADERSHIP \u2192 POLICY (direct decision-making power):\n` +
+    `- "Netanyahu removed" + "Gaza ceasefire" \u2192 new leader enables deal\n` +
+    `- "Putin leaves power" + "Ukraine ceasefire" \u2192 new leader negotiates\n` +
+    `- "Iran leadership change" + "Iran nuclear deal" \u2192 new leader reopens talks\n` +
+    `\n` +
+    `FINANCIAL \u2192 FINANCIAL (direct contagion):\n` +
+    `- "US debt ceiling crisis" + "Dollar index drops" \u2192 default fear = dollar weakness\n` +
+    `- "US government shutdown" + "Market volatility" \u2192 shutdown = uncertainty\n` +
+    `- "Banking crisis" + "Fed emergency cuts" \u2192 crisis forces Fed hand\n` +
+    `\n` +
+    `=== NEVER DO THESE ===\n` +
+    `- Sports games (vs, @, win on 2026-) with ANYTHING\n` +
+    `- Elon tweets counting with ANYTHING\n` +
+    `- Eurovision/F1/NBA/NHL/soccer with politics\n` +
+    `- UFO/alien markets with ANYTHING\n` +
+    `- Same topic on both sides: all Iran together, all Bitcoin together, all Fed together, all oil together\n` +
+    `- Iran conflict + Bitcoin (too many steps, not direct)\n` +
+    `- Bitcoin price targets + Bitcoin price targets (same topic)\n` +
+    `\n` +
+    `=== RULES ===\n` +
+    `1. Both sides MUST be from different topics/categories\n` +
+    `2. Causal link must be ONE direct step\n` +
+    `3. Each side needs minimum 2 markets\n` +
+    `4. Only use indices that actually exist: 0\u2013${maxIdx}\n` +
+    `5. Find AT LEAST 15 valid groups\n` +
+    `6. Include chains from different topics — don't just find Iran chains\n` +
+    `7. Look across ALL ${markets.length} markets — elections, economics, tech, crypto, geopolitics, policy\n` +
+    `\n` +
+    `Return ONLY a JSON array. Zero other text:\n` +
+    `[\n` +
+    `  {\n` +
+    `    "theme": "Cause \u2192 Direct Effect",\n` +
+    `    "emoji": "one emoji",\n` +
+    `    "description": "One sentence: exact real-world mechanism",\n` +
+    `    "sideA_label": "CAUSE LABEL",\n` +
+    `    "sideA_indices": [3, 7, 12],\n` +
+    `    "sideB_label": "EFFECT LABEL",\n` +
+    `    "sideB_indices": [45, 67, 89]\n` +
+    `  }\n` +
+    `]`
+  );
 }
 
 // ── Post-filter one Claude chain response ─────────────────────────────────────
-function filterChain(
-  chain: any,
-  batch: GammaMarket[],
-  offset: number
-): CrossChain | null {
-  const toChainMarket = (globalIdx: number): ChainMarket | null => {
-    const m = batch[globalIdx - offset];
-    return m ? enrichMarket(m) : null;
-  };
-
+function filterChain(chain: any, markets: GammaMarket[]): CrossChain | null {
   const groupA: ChainMarket[] = (chain.sideA_indices || [])
-    .filter((i: number) => i >= offset && i < offset + batch.length)
-    .map(toChainMarket)
+    .filter((i: number) => Number.isInteger(i) && i >= 0 && i < markets.length)
+    .map((i: number) => enrichMarket(markets[i]))
     .filter((m: ChainMarket | null): m is ChainMarket => m !== null);
 
   const groupB: ChainMarket[] = (chain.sideB_indices || [])
-    .filter((i: number) => i >= offset && i < offset + batch.length)
-    .map(toChainMarket)
+    .filter((i: number) => Number.isInteger(i) && i >= 0 && i < markets.length)
+    .map((i: number) => enrichMarket(markets[i]))
     .filter((m: ChainMarket | null): m is ChainMarket => m !== null);
 
-  // Need at least 2 on each side
-  if (groupA.length < 2 || groupB.length < 2) return null;
+  if (groupA.length < 2 || groupB.length < 2) {
+    console.log("Rejected — not enough markets:", chain.theme);
+    return null;
+  }
 
   const textA = groupA.map(m => m.question.toLowerCase()).join(" ");
   const textB = groupB.map(m => m.question.toLowerCase()).join(" ");
@@ -259,10 +247,10 @@ function filterChain(
     "drivers champion", "game handicap", "o/u ", "over/under", "eurovision"];
   if (SPORTS_KW.some(kw => allText.includes(kw))) return null;
 
-  // Hard reject: alien/UFO markets
+  // Hard reject: alien/UFO
   if (allText.includes("alien") || allText.includes("ufo") || allText.includes("non-human")) return null;
 
-  // Hard reject: tweet-counting markets
+  // Hard reject: tweet-counting
   if (allText.includes("tweets from") || allText.includes("post 2") ||
     allText.includes("post 3") || allText.includes("post 4")) return null;
 
@@ -277,7 +265,10 @@ function filterChain(
     ["ethereum", "ethereum"], ["trump", "trump"],
   ];
   for (const [kA, kB] of SAME_TOPIC_PAIRS) {
-    if (textA.includes(kA) && textB.includes(kB)) return null;
+    if (textA.includes(kA) && textB.includes(kB)) {
+      console.log("Rejected same-topic:", chain.theme, "| topic:", kA);
+      return null;
+    }
   }
 
   const allMkts = [...groupA, ...groupB];
@@ -286,7 +277,7 @@ function filterChain(
   return {
     theme: chain.theme || "Causal Chain",
     description: chain.description || "",
-    emoji: chain.emoji || "🔗",
+    emoji: chain.emoji || "\uD83D\uDD17",
     groupALabel: chain.sideA_label || "CAUSE",
     groupBLabel: chain.sideB_label || "EFFECT",
     groupA,
@@ -297,24 +288,27 @@ function filterChain(
 }
 
 // ── Parse Claude response → CrossChain[] ─────────────────────────────────────
-function parseChainsFromResponse(data: any, batch: GammaMarket[], offset: number): CrossChain[] {
+function parseChainsFromResponse(data: any, markets: GammaMarket[]): CrossChain[] {
   try {
     const text: string = data?.content?.[0]?.text ?? "[]";
+    console.log("Claude raw response start:", text.substring(0, 300));
     const clean = text.replace(/```json|```/g, "").trim();
     const start = clean.indexOf("[");
     const end = clean.lastIndexOf("]");
     if (start === -1 || end === -1) return [];
     const aiChains: any[] = JSON.parse(clean.slice(start, end + 1));
-    return aiChains.map(c => filterChain(c, batch, offset)).filter((c): c is CrossChain => c !== null);
-  } catch {
+    console.log("Raw chains from Claude:", aiChains.length);
+    return aiChains.map(c => filterChain(c, markets)).filter((c): c is CrossChain => c !== null);
+  } catch (e) {
+    console.error("JSON parse failed:", e);
     return [];
   }
 }
 
-// ── Fetch AI chains: 4 parallel batches of 50 from top 200 markets ────────────
+// ── Fetch AI chains: ONE Claude call with all 200 markets ─────────────────────
 async function fetchAiChains(allMarkets: GammaMarket[]): Promise<CrossChain[]> {
-  // Filter to uncertain, active markets with real volume (lower floor = more variety)
-  const sorted = [...allMarkets]
+  // Filter to uncertain, active markets with real volume
+  const top200 = [...allMarkets]
     .filter(m => {
       try {
         const yes = parseFloat(JSON.parse(m.outcomePrices || '["0.5"]')[0]);
@@ -322,41 +316,42 @@ async function fetchAiChains(allMarkets: GammaMarket[]): Promise<CrossChain[]> {
         return yes > 0.05 && yes < 0.95 && vol24 > 5000 && m.active && !m.closed;
       } catch { return false; }
     })
-    .sort((a, b) => parseFloat(b.volume24hr as any) - parseFloat(a.volume24hr as any));
+    .sort((a, b) => parseFloat(b.volume24hr as any) - parseFloat(a.volume24hr as any))
+    .slice(0, 200);
 
-  const top200 = sorted.slice(0, 200);
   if (top200.length < 20) return [];
 
-  const callClaude = async (batch: GammaMarket[], offset: number): Promise<CrossChain[]> => {
-    const response = await fetch(`${BASE}/api/polymarket/claude`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: "claude-sonnet-4-5",
-        max_tokens: 4000,
-        messages: [{ role: "user", content: buildChainPrompt(batch, offset) }],
-      }),
-    });
-    if (!response.ok) return [];
-    const data = await response.json();
-    if (data.error) return [];
-    return parseChainsFromResponse(data, batch, offset);
-  };
+  console.log("Sending", top200.length, "markets to Claude in one call");
+  console.log("Top 5:", top200.slice(0, 5).map(m => m.question));
 
-  // 4 batches of 50 in parallel
-  const [c1, c2, c3, c4] = await Promise.all([
-    callClaude(top200.slice(0, 50), 0),
-    callClaude(top200.slice(50, 100), 50),
-    callClaude(top200.slice(100, 150), 100),
-    callClaude(top200.slice(150, 200), 150),
-  ]);
+  const response = await fetch(`${BASE}/api/polymarket/claude`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: "claude-sonnet-4-5",
+      max_tokens: 8000,
+      messages: [{ role: "user", content: buildChainPrompt(top200) }],
+    }),
+  });
 
-  // Deduplicate by theme, then by sideA market set, sort by volume, cap at 20
-  const combined = [...c1, ...c2, ...c3, ...c4];
+  if (!response.ok) {
+    console.error("Claude API HTTP error:", response.status);
+    return [];
+  }
+  const data = await response.json();
+  if (data.error) {
+    console.error("Claude API error:", JSON.stringify(data.error));
+    return [];
+  }
+
+  const chains = parseChainsFromResponse(data, top200);
+  console.log("Valid chains after filtering:", chains.length);
+
+  // Deduplicate by theme, then by sideA market set, sort by volume, cap at 25
   const seenThemes = new Set<string>();
   const seenSideA = new Set<string>();
 
-  return combined
+  return chains
     .filter(c => {
       if (seenThemes.has(c.theme)) return false;
       seenThemes.add(c.theme);
@@ -386,7 +381,6 @@ export function useCausalChains() {
   // Refresh: get fresh markets from Gamma, then force Claude to re-analyze
   const refetch = async () => {
     await refetchMarkets();
-    // Invalidate AI chains so Claude runs again with the new market data
     await qc.invalidateQueries({ queryKey: ["ai-chains-v2"] });
   };
 
@@ -451,7 +445,7 @@ export function useLiveSpreadScanner() {
           const spreadB = parseFloat(b.bestAsk as any) - parseFloat(b.bestBid as any);
           return spreadB - spreadA;
         })
-        .slice(0, 50); // top 50 candidates by Gamma spread
+        .slice(0, 50);
 
       // Phase 2: verify top 50 with live CLOB in parallel
       const results = await Promise.all(

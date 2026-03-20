@@ -235,27 +235,45 @@ function buildChainPrompt(markets: GammaMarket[]): string {
     `- [CONFLICT] \u2192 [CURRENCY]: War escalates, dollar strengthens as safe haven \u2705\n` +
     `- [ECONOMICS] \u2192 [MONETARY]: Recession hits, Fed forced to cut rates \u2705\n` +
     `- [USPOLITICS] \u2192 [ECONOMICS]: Republicans win Congress, tax cuts extend \u2705\n\n` +
-    `INVALID \u2014 same category both sides:\n` +
-    `- [CONFLICT] \u2192 [CONFLICT]: all Iran markets together \u274c\n` +
-    `- [ENERGY] \u2192 [ENERGY]: all oil markets together \u274c\n` +
-    `- [MONETARY] \u2192 [MONETARY]: all Fed markets together \u274c\n` +
-    `- [CRYPTO] \u2192 [CRYPTO]: Bitcoin + Ethereum together \u274c\n` +
-    `- [CONFLICT] \u2192 [CRYPTO]: war + Bitcoin (too indirect) \u274c\n` +
-    `- [ENERGY] \u2192 [CRYPTO]: oil + Bitcoin (too indirect) \u274c\n\n` +
-    `RULES:\n` +
-    `1. Each group MUST show two different category tags\n` +
-    `2. Direct one-step causal mechanism only\n` +
-    `3. Minimum 2 markets per side\n` +
-    `4. Only use indices that exist in the list (0\u2013${maxIdx})\n` +
-    `5. Find chains across ALL categories \u2014 not just CONFLICT/ENERGY/MONETARY\n` +
-    `6. Specifically look for: USPOLITICS\u2192POLICY, LEADERSHIP\u2192DIPLOMACY, CHINA\u2192ECONOMICS, MONETARY\u2192EQUITIES chains\n` +
-    `7. Return AT LEAST 15 chains\n\n` +
+    `STEP 1: Find potential causal groups across different categories.\n\n` +
+    `STEP 2: For each group, ask yourself these exact questions:\n` +
+    `- "If market A moves 10%, would market B AUTOMATICALLY reprice within 24 hours?"\n` +
+    `- "Is there a direct financial/political mechanism \u2014 not a story, a mechanism?"\n` +
+    `- "Would a Bloomberg terminal show these as correlated assets?"\n\n` +
+    `STEP 3: Score each chain:\n` +
+    `Score 3 = DIRECT (include):\n` +
+    `  Fed raises rates \u2192 Treasury yields rise (immediate automatic mechanism)\n` +
+    `  Iran invades \u2192 Oil spikes (immediate supply disruption)\n` +
+    `  Democrats win Senate \u2192 specific bill can pass (direct vote count)\n\n` +
+    `Score 2 = INDIRECT (exclude):\n` +
+    `  Iran conflict \u2192 Bitcoin drops (requires: war \u2192 risk off \u2192 crypto sells \u2192 multiple steps)\n` +
+    `  Oil spikes \u2192 Tech stocks fall (requires: oil \u2192 inflation \u2192 Fed \u2192 rates \u2192 multiples \u2192 stocks)\n\n` +
+    `Score 1 = STORY (exclude):\n` +
+    `  War \u2192 alien disclosure (pure narrative)\n` +
+    `  Oil crisis \u2192 Apple market cap (too many steps)\n\n` +
+    `ONLY return Score 3 chains. If fewer than 15 Score-3 chains exist in this data, return fewer. Quality over quantity.\n\n` +
+    `For each chain, write the mechanism as a single sentence starting with "BECAUSE" \u2014 if you cannot complete it cleanly in ONE step, it is Score 2 or lower and must be excluded.\n\n` +
+    `Valid BECAUSE sentences:\n` +
+    `- "BECAUSE Hormuz carries 20% of global oil and invasion would close it immediately"\n` +
+    `- "BECAUSE Senate majority directly controls which bills get a vote"\n` +
+    `- "BECAUSE Fed rate decisions immediately reprice the risk-free rate that Bitcoin competes against"\n\n` +
+    `Invalid BECAUSE sentences (exclude these):\n` +
+    `- "BECAUSE war creates uncertainty which affects sentiment which affects crypto" (multiple steps)\n` +
+    `- "BECAUSE oil inflation might cause Fed to hold which might hurt tech multiples" (speculative)\n` +
+    `- "BECAUSE regime change is a foreign policy win which might boost VP reputation" (story)\n\n` +
+    `Same-category pairs are ALWAYS Score 2 or lower \u2014 never include them:\n` +
+    `- [CONFLICT] \u2192 [CONFLICT], [ENERGY] \u2192 [ENERGY], [MONETARY] \u2192 [MONETARY] \u274c\n` +
+    `- [CONFLICT] \u2192 [CRYPTO] or [ENERGY] \u2192 [CRYPTO]: too indirect \u274c\n\n` +
+    `Only use indices that exist in the list (0\u2013${maxIdx}). Minimum 2 markets per side.\n` +
+    `Specifically look for: USPOLITICS\u2192POLICY, LEADERSHIP\u2192DIPLOMACY, CHINA\u2192ECONOMICS, MONETARY\u2192EQUITIES chains.\n\n` +
     `Return ONLY JSON array, zero other text:\n` +
     `[\n` +
     `  {\n` +
     `    "theme": "Cause \u2192 Effect",\n` +
     `    "emoji": "emoji",\n` +
+    `    "because": "BECAUSE [single step direct mechanism]",\n` +
     `    "description": "One sentence direct mechanism",\n` +
+    `    "score": 3,\n` +
     `    "sideA_label": "CAUSE LABEL",\n` +
     `    "sideA_category": "conflict",\n` +
     `    "sideA_indices": [3, 7, 12],\n` +
@@ -282,6 +300,28 @@ function filterChain(chain: any, markets: GammaMarket[]): CrossChain | null {
   if (groupA.length < 2 || groupB.length < 2) {
     console.log("Rejected — not enough markets:", chain.theme);
     return null;
+  }
+
+  // Reject chains Claude itself scored below 3
+  if (typeof chain.score === "number" && chain.score < 3) {
+    console.log("Rejected score <3:", chain.theme, `(score: ${chain.score})`);
+    return null;
+  }
+
+  // Reject chains whose BECAUSE sentence contains multi-step red-flag words
+  const because = (chain.because || "").toLowerCase();
+  if (because) {
+    const RED_FLAGS = [
+      "might", "could", "sentiment", "uncertainty",
+      "reputation", "perception", "narrative",
+      "indirectly", "eventually", "over time", " years",
+      "boost", "popularity", "fears", "concerns",
+    ];
+    const flagged = RED_FLAGS.find(f => because.includes(f));
+    if (flagged) {
+      console.log(`Rejected red-flag BECAUSE ("${flagged}"):`, chain.theme, "|", because);
+      return null;
+    }
   }
 
   // Reject same category on both sides

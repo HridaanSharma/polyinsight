@@ -1,0 +1,98 @@
+You're right. Brute force rejection is the wrong approach — it'll always miss edge cases and you'll keep playing whack-a-mole.
+
+The real fix is making Claude smarter about what "direct causal link" means. The problem is Claude doesn't actually understand market mechanics — it's pattern matching on keywords and inventing plausible-sounding stories.
+
+The solution is to give Claude a **self-validation step**:
+
+Tell your agent:
+
+---
+
+Change the Claude prompt to include a second reasoning pass where Claude validates its own chains before returning them:
+
+```javascript
+content: `You are a senior macro trader. Here are active Polymarket markets:
+
+${marketList}
+
+STEP 1: Find potential causal groups across different categories.
+
+STEP 2: For each group you find, ask yourself these exact questions:
+- "If market A moves 10%, would market B AUTOMATICALLY reprice within 24 hours?"
+- "Is there a direct financial/political mechanism — not a story, a mechanism?"
+- "Would a Bloomberg terminal show these as correlated assets?"
+
+STEP 3: Apply this scoring rubric to each chain:
+Score 3 = DIRECT (include): 
+  Fed raises rates → Treasury yields rise (immediate automatic mechanism)
+  Iran invades → Oil spikes (immediate supply disruption)
+  Democrats win Senate → specific bill can pass (direct vote count)
+
+Score 2 = INDIRECT (exclude):
+  Iran conflict → Bitcoin drops (requires: war → risk off → crypto sells → multiple steps)
+  Oil spikes → Tech stocks fall (requires: oil → inflation → Fed → rates → multiples → stocks)
+  Regime falls → Vance wins 2028 (requires: regime falls → Trump wins → Vance popularity → 2 years later)
+
+Score 1 = STORY (exclude):
+  War → alien disclosure (pure narrative, no mechanism)
+  Oil crisis → Apple market cap (too many steps, too speculative)
+
+ONLY return chains with Score 3. If you cannot find 15 Score-3 chains in this data, return fewer. Quality over quantity.
+
+For each chain you include, write the mechanism as a single sentence starting with "BECAUSE" — if you cannot complete that sentence cleanly in one step, the chain is Score 2 or lower and should be excluded.
+
+Examples of valid BECAUSE sentences:
+- "BECAUSE Hormuz carries 20% of global oil and invasion would close it immediately"
+- "BECAUSE Senate majority directly controls which bills get a vote"
+- "BECAUSE Fed rate decisions immediately reprice risk-free rate which Bitcoin competes against"
+
+Examples of invalid BECAUSE sentences:
+- "BECAUSE war creates uncertainty which affects sentiment which affects crypto" (too many steps)
+- "BECAUSE oil inflation might cause Fed to hold which might hurt tech multiples" (too speculative)
+- "BECAUSE regime change is a foreign policy win which might boost VP's reputation" (story not mechanism)
+
+Return ONLY JSON:
+[
+  {
+    "theme": "Cause → Effect",
+    "emoji": "emoji",
+    "because": "BECAUSE [single step direct mechanism]",
+    "description": "one sentence",
+    "score": 3,
+    "sideA_label": "CAUSE",
+    "sideA_indices": [3, 7],
+    "sideB_label": "EFFECT",
+    "sideB_indices": [12, 15]
+  }
+]`
+```
+
+Then in your validation code, add one more filter:
+
+```javascript
+// Reject anything Claude itself scored below 3
+// or where the BECAUSE sentence contains these red flag words
+.filter(chain => {
+  if (chain.score < 3) return false
+  
+  const because = (chain.because || '').toLowerCase()
+  
+  // Red flags = multiple steps hidden in the because sentence
+  const redFlags = [
+    'might', 'could', 'sentiment', 'uncertainty',
+    'reputation', 'perception', 'story', 'narrative',
+    'indirectly', 'eventually', 'over time', 'years',
+    'boost', 'popularity', 'fears', 'concerns'
+  ]
+  
+  const hasRedFlag = redFlags.some(flag => because.includes(flag))
+  if (hasRedFlag) {
+    console.log('Rejected red flag because:', chain.theme, '|', because)
+    return false
+  }
+  
+  return true
+})
+```
+
+This way Claude is doing its own quality control using financial reasoning, not you hardcoding topics. If Claude can't write a clean one-step BECAUSE sentence, the chain gets rejected automatically. No whack-a-mole needed.

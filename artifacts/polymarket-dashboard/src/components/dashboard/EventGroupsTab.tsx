@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from "react"
-import { Search, Clock, TrendingUp, TrendingDown, AlertTriangle, AlertCircle, ArrowDown } from "lucide-react"
+import { Search, Clock, TrendingUp, TrendingDown, AlertCircle } from "lucide-react"
 import { motion } from "framer-motion"
 import { GammaEvent, GammaMarket } from "@/hooks/use-polymarket"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -47,25 +47,6 @@ function isValuableGroup(event: GammaEvent): boolean {
   return hasUncertain && totalVol > 10000;
 }
 
-interface ImpliedTotalInfo {
-  total: number;
-  pct: number;
-  status: "overpriced" | "underpriced" | "fair";
-  excess: number;
-}
-
-function getImpliedTotal(markets: GammaMarket[]): ImpliedTotalInfo {
-  const relevant = markets.filter(m => {
-    const t = getQuestionType(m.question || "");
-    return t !== "spread";
-  });
-  if (relevant.length === 0) return { total: 1, pct: 100, status: "fair", excess: 0 };
-  const total = relevant.reduce((s, m) => s + getYesPrice(m), 0);
-  const pct = Math.round(total * 100);
-  const status = total > 1.10 ? "overpriced" : total < 0.90 ? "underpriced" : "fair";
-  const excess = Math.round(Math.abs(total - 1) * 100);
-  return { total, pct, status, excess };
-}
 
 export function EventGroupsTab({ events }: EventGroupsTabProps) {
   const [search, setSearch] = useState("");
@@ -122,7 +103,6 @@ export function EventGroupsTab({ events }: EventGroupsTabProps) {
             const totalVol = markets.reduce(
               (s, m) => s + parseFloat((m.volume24hr as any) || 0), 0
             );
-            const implied = getImpliedTotal(markets);
 
             // Detect which markets haven't repriced while at least one sibling moved
             const hasAnyMove = markets.some(m => Math.abs(parseFloat((m.priceChange as any) || 0)) >= 0.03);
@@ -150,23 +130,10 @@ export function EventGroupsTab({ events }: EventGroupsTabProps) {
                       <Badge variant="secondary" className="shrink-0">{markets.length}</Badge>
                     </CardTitle>
 
-                    <div className="flex items-center gap-2 mt-2 flex-wrap">
+                    <div className="mt-2">
                       <span className="text-xs text-muted-foreground font-mono">
                         Vol 24h: {formatCurrency(totalVol)}
                       </span>
-
-                      {implied.status === "overpriced" && (
-                        <span className="flex items-center gap-1 text-[11px] font-semibold text-red-400 bg-red-500/10 border border-red-500/20 px-2 py-0.5 rounded-full">
-                          <AlertTriangle size={10} />
-                          Implied {implied.pct}% — {implied.excess}% overpriced
-                        </span>
-                      )}
-                      {implied.status === "underpriced" && (
-                        <span className="flex items-center gap-1 text-[11px] font-semibold text-cyan-400 bg-cyan-500/10 border border-cyan-500/20 px-2 py-0.5 rounded-full">
-                          <ArrowDown size={10} />
-                          Implied {implied.pct}% — {implied.excess}% underpriced
-                        </span>
-                      )}
                     </div>
                   </CardHeader>
 

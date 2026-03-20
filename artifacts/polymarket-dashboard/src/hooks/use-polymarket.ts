@@ -53,11 +53,14 @@ export interface ChainMarket extends GammaMarket {
   tradeUrl: string;
 }
 
-export interface CausalChain {
+export interface CrossChain {
   theme: string;
   description: string;
   emoji: string;
-  markets: ChainMarket[];
+  groupALabel: string;
+  groupBLabel: string;
+  groupA: ChainMarket[];
+  groupB: ChainMarket[];
   totalVolume: number;
 }
 
@@ -73,57 +76,91 @@ function parseClobTokenId(raw: string | string[]): string | null {
   }
 }
 
+// Use the event slug (not the market slug) for correct Polymarket URLs
 function getTradeUrl(m: GammaMarket): string {
-  if (m.url) return m.url;
-  if (m.slug) return `https://polymarket.com/event/${m.slug}`;
-  return "https://polymarket.com";
+  const eventSlug = m.events?.[0]?.slug;
+  if (eventSlug) return `https://polymarket.com/event/${eventSlug}`;
+  return `https://polymarket.com/event/${m.slug}`;
 }
 
-// ── Causal chain definitions ────────────────────────────────────────────────
-const CAUSAL_CHAINS = [
+// ── Cross-category causal chain definitions ───────────────────────────────────
+// Each chain requires markets from BOTH group A and group B — that's the value:
+// they're from different parts of Polymarket but move together in real life.
+const CROSS_CHAINS = [
   {
-    theme: "Iran Military Escalation",
-    description: "US entry, oil prices, regime stability, and ceasefire are all connected",
+    theme: "If US Invades Iran → Oil Spikes",
+    description: "Traders betting on Iran conflict should also watch oil price markets",
     emoji: "⚡",
-    keywords: ["iran", "crude oil", "hormuz", "kharg island"],
+    groupALabel: "IRAN / CONFLICT",
+    groupBLabel: "OIL PRICES",
+    keywordsA: ["us forces enter iran", "invade iran", "us attack iran", "iran x israel", "iran x us", "kharg", "hormuz"],
+    keywordsB: ["crude oil", "oil price", "oil hit", "brent"],
   },
   {
-    theme: "Israel & Middle East",
-    description: "Netanyahu, Gaza, Lebanon, and regional ceasefire outcomes move together",
+    theme: "Iranian Regime Falls → Regional Domino",
+    description: "Regime change cascades into oil stability, Israel, and Netanyahu odds",
+    emoji: "🏛️",
+    groupALabel: "REGIME CHANGE",
+    groupBLabel: "REGIONAL IMPACT",
+    keywordsA: ["iranian regime", "iran leadership change", "iran regime fall"],
+    keywordsB: ["netanyahu", "crude oil", "oil price", "oil hit", "israel launch", "israel ground"],
+  },
+  {
+    theme: "Fed Decision → S&P 500 Move",
+    description: "Rate decisions directly affect whether the S&P opens up or down",
+    emoji: "🏦",
+    groupALabel: "FED / RATES",
+    groupBLabel: "S&P 500",
+    keywordsA: ["fed interest rate", "fed rate", "rate cut", "rate hike", "bps after the"],
+    keywordsB: ["s&p 500", "s&p 500 (spx)"],
+  },
+  {
+    theme: "Ukraine Ceasefire → Iran Spotlight",
+    description: "If Ukraine settles, US military focus shifts fully to Iran",
     emoji: "🕊️",
-    keywords: ["israel", "netanyahu", "gaza", "lebanon offensive", "iran x israel", "israel/us conflict"],
+    groupALabel: "UKRAINE / RUSSIA",
+    groupBLabel: "IRAN / US FORCES",
+    keywordsA: ["russia x ukraine ceasefire", "ukraine ceasefire", "russia x ukraine"],
+    keywordsB: ["us forces enter iran", "invade iran", "us attack iran", "iran x us"],
   },
   {
-    theme: "Trump Policy",
-    description: "Trump's decisions on wars, trade, and diplomacy are interconnected",
-    emoji: "🇺🇸",
-    keywords: ["trump", "tariff", "china trade", "trade war", "taiwan strait"],
+    theme: "US Distracted by Iran → Taiwan Risk",
+    description: "If the US is fighting in Iran, China may read Taiwan as an opportunity",
+    emoji: "🌏",
+    groupALabel: "IRAN CONFLICT",
+    groupBLabel: "TAIWAN / CHINA",
+    keywordsA: ["us forces enter iran", "invade iran", "us attack iran", "kharg", "hormuz"],
+    keywordsB: ["china invade taiwan", "invade taiwan"],
   },
   {
-    theme: "2026 US Elections",
-    description: "Senate and governor races determine the balance of power in 2027",
-    emoji: "🗳️",
-    keywords: ["senate election", "governor election", "senate seat", "governor race", "win the senate", "win the governorship", "2026 senate", "2026 governor"],
-  },
-  {
-    theme: "AI & Tech Race",
-    description: "AI model releases, regulation, and company milestones are linked",
+    theme: "OpenAI vs NVIDIA — Who Wins the AI Race?",
+    description: "Model leadership and hardware dominance are two sides of the same bet",
     emoji: "🤖",
-    keywords: ["openai", "anthropic", "google deepmind", " agi ", "gpt-5", "nvidia earnings", "llm ", "ai model"],
-  },
-  {
-    theme: "Russia-Ukraine War",
-    description: "Ceasefire, territory, and NATO outcomes are deeply linked",
-    emoji: "🛡️",
-    keywords: ["ukraine", "zelensky", "russia invade", "crimea", "donbas", "nato ukraine", "ukraine ceasefire"],
-  },
-  {
-    theme: "Crypto Market",
-    description: "Bitcoin, Ethereum, and crypto regulation move together",
-    emoji: "₿",
-    keywords: ["bitcoin", "ethereum", "btc above", "eth above", "crypto regulation", "bitcoin etf"],
+    groupALabel: "AI MODELS",
+    groupBLabel: "AI HARDWARE",
+    keywordsA: ["openai", "anthropic", "best ai model", "gpt"],
+    keywordsB: ["nvidia", "largest company", "nvidia market cap"],
   },
 ] as const;
+
+// ── Filter & enrich a single market ──────────────────────────────────────────
+function enrichMarket(m: GammaMarket): ChainMarket | null {
+  try {
+    const yes = parseFloat(JSON.parse(m.outcomePrices || '["0.5"]')[0]);
+    if (yes < 0.05 || yes > 0.95) return null;
+    if (parseFloat(m.volume24hr as any) < 5000) return null;
+    const change = parseFloat((m.oneDayPriceChange ?? m.priceChange ?? 0) as any);
+    return {
+      ...m,
+      probability: yes,
+      moved: Math.abs(change) > 0.03,
+      moveDirection: change > 0.03 ? "up" : change < -0.03 ? "down" : "flat",
+      tradeUrl: getTradeUrl(m),
+    };
+  } catch {
+    return null;
+  }
+}
 
 // ── Fetch 500 markets from Gamma ─────────────────────────────────────────────
 async function fetchAllMarkets(): Promise<GammaMarket[]> {
@@ -147,76 +184,63 @@ export function useAllMarkets() {
   });
 }
 
-// ── Causal chains built from the 500-market dataset ─────────────────────────
+// ── Cross-category causal chains ─────────────────────────────────────────────
 export function useCausalChains() {
   const { data: allMarkets = [], ...rest } = useAllMarkets();
 
-  const chains: CausalChain[] = CAUSAL_CHAINS.map(def => {
-    const matched = allMarkets.filter(m => {
-      try {
-        const yes = parseFloat(JSON.parse(m.outcomePrices || '["0.5"]')[0]);
-        if (yes < 0.05 || yes > 0.95) return false;
-        if (parseFloat(m.volume24hr as any) < 10000) return false;
-      } catch { return false; }
+  const chains: CrossChain[] = CROSS_CHAINS.map(def => {
+    const matchGroup = (keywords: readonly string[]) => {
+      const results: ChainMarket[] = [];
+      const seen = new Set<string>();
+      for (const m of allMarkets) {
+        const key = m.conditionId || m.id;
+        if (seen.has(key)) continue;
+        const q = (m.question || "").toLowerCase();
+        if (!keywords.some(kw => q.includes(kw))) continue;
+        const enriched = enrichMarket(m);
+        if (!enriched) continue;
+        seen.add(key);
+        results.push(enriched);
+        if (results.length >= 5) break;
+      }
+      return results;
+    };
 
-      const q = (m.question || "").toLowerCase();
-      const title = (m.groupItemTitle || "").toLowerCase();
-      return def.keywords.some(kw => q.includes(kw) || title.includes(kw));
-    }).filter(m => {
-      // Extra quality gate: only genuinely uncertain markets (8–92%)
-      try {
-        const yes = parseFloat(JSON.parse(m.outcomePrices || '["0.5"]')[0]);
-        return yes >= 0.08 && yes <= 0.92;
-      } catch { return false; }
-    });
+    const groupA = matchGroup(def.keywordsA);
+    const groupB = matchGroup(def.keywordsB);
 
-    // Deduplicate by conditionId, then enrich
-    const seen = new Set<string>();
-    const unique: ChainMarket[] = [];
-    for (const m of matched) {
-      const key = m.conditionId || m.id;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      let probability = 0.5;
-      try { probability = parseFloat(JSON.parse(m.outcomePrices || '["0.5"]')[0]); } catch {}
-      const change = parseFloat((m.oneDayPriceChange ?? m.priceChange ?? 0) as any);
-      unique.push({
-        ...m,
-        probability,
-        moved: Math.abs(change) > 0.03,
-        moveDirection: change > 0.03 ? "up" : change < -0.03 ? "down" : "flat",
-        tradeUrl: getTradeUrl(m),
-      });
-      if (unique.length >= 8) break;
-    }
+    // Both sides must have at least 1 market — that's the cross-category value
+    if (groupA.length === 0 || groupB.length === 0) return null;
 
-    if (unique.length < 2) return null;
+    const allMkts = [...groupA, ...groupB];
+    const totalVolume = allMkts.reduce((s, m) => s + parseFloat((m.volume24hr || 0) as any), 0);
 
     return {
       theme: def.theme,
       description: def.description,
       emoji: def.emoji,
-      markets: unique,
-      totalVolume: unique.reduce((s, m) => s + parseFloat((m.volume24hr || 0) as any), 0),
+      groupALabel: def.groupALabel,
+      groupBLabel: def.groupBLabel,
+      groupA,
+      groupB,
+      totalVolume,
     };
-  }).filter((c): c is CausalChain => c !== null);
+  }).filter((c): c is CrossChain => c !== null);
 
   return { chains, ...rest };
 }
 
-// ── Smaller market set for the Volume Spikes + Spread Scanner ───────────────
+// ── 500-market set for Volume Spikes ─────────────────────────────────────────
 export function useActiveMarkets() {
   return useQuery({
     queryKey: ["gamma-markets"],
     queryFn: async (): Promise<GammaMarket[]> => {
-      const [p1, p2, p3, p4, p5] = await Promise.all([
-        fetch(`${BASE}/api/polymarket/markets?limit=100&offset=0&active=true&closed=false&order=volume24hr&ascending=false`),
-        fetch(`${BASE}/api/polymarket/markets?limit=100&offset=100&active=true&closed=false&order=volume24hr&ascending=false`),
-        fetch(`${BASE}/api/polymarket/markets?limit=100&offset=200&active=true&closed=false&order=volume24hr&ascending=false`),
-        fetch(`${BASE}/api/polymarket/markets?limit=100&offset=300&active=true&closed=false&order=volume24hr&ascending=false`),
-        fetch(`${BASE}/api/polymarket/markets?limit=100&offset=400&active=true&closed=false&order=volume24hr&ascending=false`),
-      ]);
-      const pages = await Promise.all([p1, p2, p3, p4, p5].map(r => (r.ok ? r.json() : [])));
+      const pages = await Promise.all(
+        [0, 100, 200, 300, 400].map(offset =>
+          fetch(`${BASE}/api/polymarket/markets?limit=100&offset=${offset}&active=true&closed=false&order=volume24hr&ascending=false`)
+            .then(r => (r.ok ? r.json() : []))
+        )
+      );
       return (pages.flat() as GammaMarket[]).filter(m => m.active === true && m.closed === false);
     },
     refetchInterval: 5 * 60 * 1000,

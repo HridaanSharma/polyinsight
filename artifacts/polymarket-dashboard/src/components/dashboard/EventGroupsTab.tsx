@@ -1,7 +1,7 @@
-import { useCausalChains, type CausalChain, type ChainMarket } from "@/hooks/use-polymarket";
+import { useCausalChains, type CrossChain, type ChainMarket } from "@/hooks/use-polymarket";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { AlertTriangle, ExternalLink, RefreshCw, Loader2, TrendingUp, TrendingDown, Activity } from "lucide-react";
+import { AlertTriangle, ExternalLink, RefreshCw, Loader2, TrendingUp, TrendingDown, Activity, ArrowRight } from "lucide-react";
 
 function formatVol(v: number): string {
   if (v >= 1_000_000) return `$${(v / 1_000_000).toFixed(1)}M`;
@@ -14,31 +14,27 @@ function pctStr(p: number): string {
 }
 
 function MarketRow({ m }: { m: ChainMarket }) {
-  const changeStr =
-    m.moveDirection === "up"
-      ? `+${(Math.abs(m.oneDayPriceChange ?? m.priceChange ?? 0) * 100).toFixed(1)}%`
-      : m.moveDirection === "down"
-      ? `-${(Math.abs(m.oneDayPriceChange ?? m.priceChange ?? 0) * 100).toFixed(1)}%`
-      : "—";
+  const rawChange = parseFloat((m.oneDayPriceChange ?? m.priceChange ?? 0) as any);
+  const changeStr = m.moved
+    ? `${rawChange > 0 ? "+" : ""}${(rawChange * 100).toFixed(1)}%`
+    : "—";
 
   return (
-    <div className="flex items-center gap-2 py-2 border-b border-white/5 last:border-0 group">
+    <div className="flex items-center gap-2 py-1.5 border-b border-white/5 last:border-0 group">
       <div className="flex-1 min-w-0">
-        <p className="text-sm text-white/85 leading-snug truncate group-hover:text-white transition-colors">
+        <p className="text-xs text-white/75 leading-snug truncate group-hover:text-white transition-colors">
           {m.question}
         </p>
       </div>
 
-      {/* Probability */}
-      <div className="shrink-0 text-right w-14">
-        <span className="text-sm font-bold text-white tabular-nums">{pctStr(m.probability)}</span>
+      <div className="shrink-0 text-right w-12">
+        <span className="text-xs font-bold text-white tabular-nums">{pctStr(m.probability)}</span>
       </div>
 
-      {/* Price change */}
-      <div className="shrink-0 w-16 text-right">
+      <div className="shrink-0 w-12 text-right">
         {m.moved ? (
           <span
-            className={`inline-flex items-center gap-0.5 text-xs font-semibold px-1.5 py-0.5 rounded-full ${
+            className={`inline-flex items-center gap-0.5 text-[10px] font-semibold px-1 py-0.5 rounded-full ${
               m.moveDirection === "up"
                 ? "bg-green-500/20 text-green-400"
                 : "bg-red-500/20 text-red-400"
@@ -52,16 +48,16 @@ function MarketRow({ m }: { m: ChainMarket }) {
             {changeStr}
           </span>
         ) : (
-          <span className="text-xs text-white/25">{changeStr}</span>
+          <span className="text-[10px] text-white/25">—</span>
         )}
       </div>
 
-      {/* Trade button */}
       <a
         href={m.tradeUrl}
         target="_blank"
         rel="noreferrer"
-        className="shrink-0 flex items-center gap-1 text-xs text-white/40 hover:text-blue-400 transition-colors"
+        title="Trade on Polymarket"
+        className="shrink-0 text-white/30 hover:text-blue-400 transition-colors"
       >
         <ExternalLink className="w-3 h-3" />
       </a>
@@ -69,29 +65,67 @@ function MarketRow({ m }: { m: ChainMarket }) {
   );
 }
 
-function ChainCard({ chain }: { chain: CausalChain }) {
-  const movedCount = chain.markets.filter(m => m.moved).length;
+function GroupColumn({
+  label,
+  markets,
+  accent,
+}: {
+  label: string;
+  markets: ChainMarket[];
+  accent: "blue" | "amber";
+}) {
+  const accentCls =
+    accent === "blue"
+      ? "text-blue-400 border-blue-500/30 bg-blue-500/10"
+      : "text-amber-400 border-amber-500/30 bg-amber-500/10";
+
+  return (
+    <div className="flex-1 min-w-0 flex flex-col gap-1.5">
+      <div
+        className={`inline-flex self-start items-center text-[10px] font-bold tracking-widest uppercase px-2 py-0.5 rounded-full border ${accentCls}`}
+      >
+        {label}
+      </div>
+
+      {/* Column header row */}
+      <div className="flex items-center gap-2 pb-1 border-b border-white/8">
+        <div className="flex-1 text-[9px] text-white/25 uppercase tracking-wider">Market</div>
+        <div className="w-12 text-right text-[9px] text-white/25 uppercase tracking-wider">YES</div>
+        <div className="w-12 text-right text-[9px] text-white/25 uppercase tracking-wider">24h</div>
+        <div className="w-3" />
+      </div>
+
+      {markets.map((m, i) => (
+        <MarketRow key={m.conditionId || m.id || i} m={m} />
+      ))}
+    </div>
+  );
+}
+
+function CrossChainCard({ chain }: { chain: CrossChain }) {
+  const allMarkets = [...chain.groupA, ...chain.groupB];
+  const movedCount = allMarkets.filter(m => m.moved).length;
 
   return (
     <div className="rounded-xl border border-white/10 bg-white/5 p-4 flex flex-col gap-3 hover:bg-white/[0.07] transition-colors">
       {/* Header */}
       <div className="flex items-start justify-between gap-2">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2.5">
           <span className="text-xl leading-none">{chain.emoji}</span>
           <div>
             <h3 className="text-sm font-bold text-white leading-snug">{chain.theme}</h3>
-            <p className="text-xs text-white/45 mt-0.5">{chain.description}</p>
+            <p className="text-xs text-white/40 mt-0.5">{chain.description}</p>
           </div>
         </div>
         <div className="text-right shrink-0">
           <div className="text-xs font-semibold text-white/60 tabular-nums">{formatVol(chain.totalVolume)}</div>
-          <div className="text-[10px] text-white/30">group vol</div>
+          <div className="text-[10px] text-white/30">24h vol</div>
         </div>
       </div>
 
-      {/* Moved badge */}
+      {/* Moved alert */}
       {movedCount > 0 && (
-        <div className="flex items-center gap-2">
+        <div>
           <span className="inline-flex items-center gap-1 text-xs font-semibold text-orange-300 bg-orange-500/15 border border-orange-500/25 px-2 py-0.5 rounded-full">
             <Activity className="w-3 h-3" />
             {movedCount} market{movedCount > 1 ? "s" : ""} moved &gt;3% — check for repricing
@@ -99,18 +133,15 @@ function ChainCard({ chain }: { chain: CausalChain }) {
         </div>
       )}
 
-      {/* Market rows */}
-      <div className="flex flex-col">
-        {/* Column headers */}
-        <div className="flex items-center gap-2 pb-1 border-b border-white/8">
-          <div className="flex-1 text-[10px] text-white/30 uppercase tracking-wider">Market</div>
-          <div className="w-14 text-right text-[10px] text-white/30 uppercase tracking-wider">YES</div>
-          <div className="w-16 text-right text-[10px] text-white/30 uppercase tracking-wider">24h</div>
-          <div className="w-3" />
+      {/* Two-column cross-category layout */}
+      <div className="flex gap-4 items-start">
+        <GroupColumn label={chain.groupALabel} markets={chain.groupA} accent="blue" />
+
+        <div className="shrink-0 mt-6 self-center">
+          <ArrowRight className="w-4 h-4 text-white/20" />
         </div>
-        {chain.markets.map((m, i) => (
-          <MarketRow key={m.conditionId || m.id || i} m={m} />
-        ))}
+
+        <GroupColumn label={chain.groupBLabel} markets={chain.groupB} accent="amber" />
       </div>
     </div>
   );
@@ -144,7 +175,10 @@ export function EventGroupsTab() {
     );
   }
 
-  const totalMoved = chains.reduce((s, c) => s + c.markets.filter(m => m.moved).length, 0);
+  const totalMoved = chains.reduce(
+    (s, c) => s + [...c.groupA, ...c.groupB].filter(m => m.moved).length,
+    0
+  );
 
   return (
     <div className="flex flex-col gap-4">
@@ -152,7 +186,7 @@ export function EventGroupsTab() {
       <div className="flex items-center justify-between px-1">
         <div className="flex items-center gap-3">
           <span className="text-sm text-white/60">
-            {chains.length} active causal chain{chains.length !== 1 ? "s" : ""}
+            {chains.length} cross-category chain{chains.length !== 1 ? "s" : ""}
           </span>
           {totalMoved > 0 && (
             <Badge className="bg-orange-500/20 text-orange-300 border-orange-500/30 text-xs border">
@@ -174,12 +208,12 @@ export function EventGroupsTab() {
 
       {chains.length === 0 ? (
         <div className="text-center py-16 text-white/40">
-          <p className="text-sm">No chains matched — try refreshing.</p>
+          <p className="text-sm">No cross-category pairs found — markets may be thin right now.</p>
         </div>
       ) : (
-        <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           {chains.map(chain => (
-            <ChainCard key={chain.theme} chain={chain} />
+            <CrossChainCard key={chain.theme} chain={chain} />
           ))}
         </div>
       )}

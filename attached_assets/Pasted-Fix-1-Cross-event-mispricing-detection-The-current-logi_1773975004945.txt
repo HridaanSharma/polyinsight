@@ -1,0 +1,61 @@
+Fix 1 — Cross-event mispricing detection:
+The current logic is wrong. It's only catching obvious cases. Here's exactly how to detect mispricing properly:
+Within a single event group (intra-event):
+Each event from gamma-api.polymarket.com/events has a markets array. Each market in that array has a outcomePrices field which is a JSON string like ["0.45","0.55"] — index 0 is YES price, index 1 is NO price.
+For multi-outcome events (like PL winner with 10 teams), sum all the YES prices across every market in the group. This should equal 1.00. If it equals 1.40, there's 40% overpricing. Show this as "Implied total: 140% — 40% overpriced" in red on the group card.
+The code logic:
+javascriptconst impliedTotal = event.markets.reduce((sum, m) => {
+  const prices = JSON.parse(m.outcomePrices)
+  return sum + parseFloat(prices[0])
+}, 0)
+
+if (impliedTotal > 1.10) flag as OVERPRICED
+if (impliedTotal < 0.90) flag as UNDERPRICED
+Cross-event mispricing (the harder one):
+This requires semantic matching — finding markets across different events that are logically linked. The Gamma API has a tags array on each market. Two markets with the same tag AND whose prices are logically inconsistent = cross-event mispricing.
+Example logic:
+javascript// Group all markets by their tags
+// Find markets tagged "Trump" or "US Politics" or "2026 Midterms"
+// If "Democrats win Senate" = 60% but "Democrats pass legislation" = 20%
+// Flag: these are inconsistent — if Dems win Senate at 60%, 
+// legislation passing should be higher than 20%
+```
+
+For the demo, focus only on intra-event mispricing (the sum > 110% check) — it's reliable, data-driven, and works with every event group. Cross-event is too complex for a POC.
+
+---
+
+**Fix 2 — Spread scanner showing everything at 2%:**
+
+The problem is it's using `bestBid`/`bestAsk` from the Gamma API which are stale cached values, not live orderbook data. Here's exactly how to get real spreads:
+
+**Step 1** — Fetch top 30 markets by volume:
+```
+GET https://gamma-api.polymarket.com/markets?active=true&closed=false&limit=30&order=volume24hr&ascending=false
+Step 2 — For each market, get the YES token ID:
+javascriptconst tokenId = JSON.parse(market.clobTokenIds)[0]
+```
+Note: `clobTokenIds` is a JSON string, not an array — you need to `JSON.parse()` it first. This is why most implementations get it wrong.
+
+**Step 3** — Hit the live CLOB orderbook for each:
+```
+GET https://clob.polymarket.com/book?token_id={tokenId}
+Step 4 — Extract real spread:
+javascriptconst bestBid = parseFloat(response.bids[0]?.price || 0)
+const bestAsk = parseFloat(response.asks[0]?.price || 1)
+const spread = bestAsk - bestBid
+Step 5 — Filter to only show meaningful spreads:
+javascript// Only show if:
+// - bestBid is between 0.05 and 0.95 (not a dead market)
+// - volume24hr > 5000 (real liquidity exists)
+// - spread > 0.02 (2 cents minimum worth showing)
+The reason everything shows 2% right now is the Gamma cached values are all slightly stale and cluster around the same number. The live CLOB orderbook will show real variance — some markets will have 1 cent spreads, others 10+ cents. That's the actual signal.
+Do all 30 CLOB fetches in parallel:
+javascriptconst orderbooks = await Promise.all(
+  filteredMarkets.map(m => 
+    fetch(`${proxy}/clob/book?token_id=${JSON.parse(m.clobTokenIds)[0]}`)
+    .then(r => r.json())
+    .catch(() => null)
+  )
+)
+Skip any that return null.

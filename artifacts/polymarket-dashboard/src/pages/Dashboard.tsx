@@ -1,7 +1,7 @@
 import React, { useState } from "react"
 import { motion, AnimatePresence } from "framer-motion"
 import { RefreshCcw, Activity, Zap, ShieldAlert } from "lucide-react"
-import { useActiveMarkets, useSpreadScanner } from "@/hooks/use-polymarket"
+import { useActiveEvents, useActiveMarkets, useLiveSpreadScanner } from "@/hooks/use-polymarket"
 import { EventGroupsTab } from "@/components/dashboard/EventGroupsTab"
 import { VolumeSpikesTab } from "@/components/dashboard/VolumeSpikesTab"
 import { SpreadScannerTab } from "@/components/dashboard/SpreadScannerTab"
@@ -13,20 +13,44 @@ export default function Dashboard() {
   const [activeTab, setActiveTab] = useState<TabId>("events");
 
   const {
+    data: events = [],
+    isLoading: eventsLoading,
+    refetch: refetchEvents,
+    isRefetching: eventsRefetching,
+  } = useActiveEvents();
+
+  const {
     data: markets = [],
     isLoading: marketsLoading,
     refetch: refetchMarkets,
     isRefetching: marketsRefetching,
   } = useActiveMarkets();
 
-  const spreads = useSpreadScanner(markets);
+  const {
+    data: spreads = [],
+    isLoading: spreadsLoading,
+    refetch: refetchSpreads,
+    isRefetching: spreadsRefetching,
+  } = useLiveSpreadScanner();
 
-  const handleRefresh = () => refetchMarkets();
+  const handleRefresh = () => {
+    if (activeTab === "events") refetchEvents();
+    else if (activeTab === "spikes") refetchMarkets();
+    else refetchSpreads();
+  };
 
-  const isGlobalLoading = marketsLoading;
-  const isCurrentTabRefetching = marketsRefetching;
+  const isCurrentTabLoading =
+    activeTab === "events" ? eventsLoading :
+    activeTab === "spikes" ? marketsLoading :
+    false;
 
-  const totalMarkets = markets.length;
+  const isCurrentTabRefetching =
+    activeTab === "events" ? eventsRefetching :
+    activeTab === "spikes" ? marketsRefetching :
+    spreadsRefetching;
+
+  const totalMarkets =
+    events.reduce((sum, e) => sum + (e.markets?.length || 0), 0) || markets.length;
 
   const tabs = [
     { id: "events" as TabId, label: "Event Groups", icon: Activity },
@@ -48,7 +72,7 @@ export default function Dashboard() {
                   Polymarket Intel
                 </h1>
                 <p className="text-xs text-muted-foreground font-mono mt-0.5">
-                  Live Terminal • {totalMarkets || markets.length} active markets
+                  Live Terminal • {totalMarkets} active markets
                 </p>
               </div>
             </div>
@@ -83,7 +107,7 @@ export default function Dashboard() {
               variant="outline"
               size="sm"
               onClick={handleRefresh}
-              disabled={isGlobalLoading || isCurrentTabRefetching}
+              disabled={isCurrentTabLoading || isCurrentTabRefetching}
               className="hidden md:flex bg-secondary/30"
             >
               <RefreshCcw className={`mr-2 h-4 w-4 ${isCurrentTabRefetching ? "animate-spin" : ""}`} />
@@ -94,11 +118,11 @@ export default function Dashboard() {
       </header>
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {isGlobalLoading ? (
+        {isCurrentTabLoading ? (
           <div className="flex flex-col items-center justify-center py-32 space-y-4">
             <div className="w-12 h-12 border-4 border-primary/20 border-t-primary rounded-full animate-spin" />
             <p className="text-muted-foreground font-mono animate-pulse">
-              Fetching markets from Gamma API...
+              {activeTab === "events" ? "Loading events from Gamma API..." : "Fetching markets..."}
             </p>
           </div>
         ) : (
@@ -110,13 +134,14 @@ export default function Dashboard() {
               exit={{ opacity: 0, y: -10 }}
               transition={{ duration: 0.2 }}
             >
-              {activeTab === "events" && <EventGroupsTab markets={markets} />}
+              {activeTab === "events" && <EventGroupsTab events={events} />}
               {activeTab === "spikes" && <VolumeSpikesTab markets={markets} />}
               {activeTab === "spreads" && (
                 <SpreadScannerTab
                   spreads={spreads}
-                  isRefreshing={marketsRefetching}
-                  onRefresh={refetchMarkets}
+                  isLoading={spreadsLoading}
+                  isRefreshing={spreadsRefetching}
+                  onRefresh={refetchSpreads}
                 />
               )}
             </motion.div>

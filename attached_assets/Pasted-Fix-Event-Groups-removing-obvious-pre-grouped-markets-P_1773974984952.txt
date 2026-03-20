@@ -1,0 +1,67 @@
+Fix — Event Groups (removing obvious pre-grouped markets):
+Polymarket already groups simple winner markets (PL winner, NBA Finals winner etc.) natively — showing those in our event groups adds zero value. We want to surface non-obvious cross-market relationships that Polymarket doesn't show.
+Filter out any event where:
+javascript// Skip events where all markets are just "Will X win Y?" winner markets
+// These are already obvious on Polymarket
+const isObviousWinnerMarket = event.markets.every(m => 
+  m.question.toLowerCase().includes('win the') ||
+  m.question.toLowerCase().includes('win the championship') ||
+  m.question.toLowerCase().includes('finish 1st')
+)
+if (isObviousWinnerMarket) skip this event
+```
+
+**What we DO want to group and show:**
+
+Events where markets are **logically connected but not obviously so.** These come from the same `eventSlug` but ask different types of questions about the same underlying situation.
+
+Good example:
+```
+Event: "2026 US Midterms"
+  - Will Democrats win the Senate? → 45%
+  - Will Democrats win the House? → 38%  
+  - Will Biden approval be above 45% by Nov? → 22%
+  - Will a major immigration bill pass? → 15%
+These are all different question types about the same event — Polymarket shows them as separate items in a flat list. We group them and show the implied total.
+How to detect these valuable groups:
+javascript// Only show an event group if:
+// 1. It has 2+ markets
+// 2. The markets ask DIFFERENT types of questions (not all "who wins")
+// 3. At least one market is between 0.10 and 0.90 price (genuinely uncertain)
+// 4. Total group volume24hr > 10000 (people actually care)
+
+const isValuableGroup = (event) => {
+  const markets = event.markets
+  if (markets.length < 2) return false
+  
+  // Check markets ask different things - not all winner markets
+  const questionTypes = markets.map(m => {
+    if (m.question.toLowerCase().includes('win')) return 'winner'
+    if (m.question.toLowerCase().includes('will')) return 'outcome'
+    if (m.question.toLowerCase().includes('how many')) return 'quantity'
+    if (m.question.toLowerCase().includes('price')) return 'price'
+    return 'other'
+  })
+  const uniqueTypes = new Set(questionTypes)
+  if (uniqueTypes.size === 1 && uniqueTypes.has('winner')) return false
+  
+  // Check at least one genuinely uncertain market
+  const hasUncertainMarket = markets.some(m => {
+    const prices = JSON.parse(m.outcomePrices)
+    const yesPrice = parseFloat(prices[0])
+    return yesPrice > 0.10 && yesPrice < 0.90
+  })
+  
+  // Check meaningful volume
+  const totalVolume = markets.reduce((sum, m) => 
+    sum + parseFloat(m.volume24hr || 0), 0)
+  
+  return hasUncertainMarket && totalVolume > 10000
+}
+For each valuable group, show:
+
+Event name as header
+Each market with its YES probability bar
+The implied total (sum of all YES prices) — highlight red if above 110%
+Which markets haven't moved in 24h while others in the group have — label those "⚠️ Hasn't repriced" in orange
+Total group volume so trader knows if it's worth their time

@@ -1,5 +1,5 @@
 import React from "react"
-import { ExternalLink, RefreshCw, Zap } from "lucide-react"
+import { ExternalLink, RefreshCw, Zap, Loader2 } from "lucide-react"
 import { SpreadData } from "@/hooks/use-polymarket"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -7,11 +7,12 @@ import { formatCurrency, formatPercent, cn } from "@/lib/utils"
 
 interface SpreadScannerTabProps {
   spreads: SpreadData[];
+  isLoading: boolean;
   isRefreshing: boolean;
   onRefresh: () => void;
 }
 
-export function SpreadScannerTab({ spreads, isRefreshing, onRefresh }: SpreadScannerTabProps) {
+export function SpreadScannerTab({ spreads, isLoading, isRefreshing, onRefresh }: SpreadScannerTabProps) {
 
   const getSpreadColor = (spread: number) => {
     if (spread > 0.08) return "text-green-400 bg-green-500/10 border-green-500/20";
@@ -20,10 +21,24 @@ export function SpreadScannerTab({ spreads, isRefreshing, onRefresh }: SpreadSca
   };
 
   const getSpreadBadge = (spread: number) => {
-    if (spread > 0.08) return <Badge className="bg-green-500/20 text-green-400 border-green-500/30 text-[10px]">High Opp</Badge>;
-    if (spread >= 0.04) return <Badge className="bg-yellow-500/20 text-yellow-400 border-yellow-500/30 text-[10px]">Medium Opp</Badge>;
-    return <Badge variant="secondary" className="text-[10px]">Standard</Badge>;
+    if (spread > 0.08) return <Badge className="bg-green-500/20 text-green-400 border-green-500/30 text-[10px]">Wide Spread</Badge>;
+    if (spread >= 0.04) return <Badge className="bg-yellow-500/20 text-yellow-400 border-yellow-500/30 text-[10px]">Medium Spread</Badge>;
+    return <Badge variant="secondary" className="text-[10px]">Tight</Badge>;
   };
+
+  if (isLoading) {
+    return (
+      <div className="flex flex-col items-center justify-center py-32 space-y-4 animate-in fade-in duration-300">
+        <Loader2 className="h-10 w-10 animate-spin text-primary/60" />
+        <p className="text-muted-foreground font-mono text-sm animate-pulse">
+          Fetching live CLOB orderbooks...
+        </p>
+        <p className="text-xs text-muted-foreground/60 font-mono">
+          Querying top 30 markets in parallel
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-4 animate-in fade-in slide-in-from-bottom-4 duration-500">
@@ -35,7 +50,7 @@ export function SpreadScannerTab({ spreads, isRefreshing, onRefresh }: SpreadSca
             Live Spread Scanner
           </h3>
           <p className="text-sm text-muted-foreground mt-0.5">
-            {spreads.length} active markets with real bid/ask from Gamma API — filtered by volume &gt; $2K and price 10–90¢
+            {spreads.length} markets with real bid/ask from live CLOB orderbook — spread &gt; 2¢, bid 5–95¢, vol &gt; $5K
           </p>
         </div>
         <Button variant="outline" size="sm" onClick={onRefresh} disabled={isRefreshing}>
@@ -61,7 +76,7 @@ export function SpreadScannerTab({ spreads, isRefreshing, onRefresh }: SpreadSca
               {spreads.length === 0 && (
                 <tr>
                   <td colSpan={6} className="px-6 py-12 text-center text-muted-foreground">
-                    No markets match the filter criteria right now.
+                    No markets with spread &gt; 2¢ in current top 30 by volume.
                   </td>
                 </tr>
               )}

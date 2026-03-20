@@ -37,12 +37,25 @@ app.get("/health", (_req, res) => {
 
 app.use("/api", router);
 
-// Serve built frontend if present (production)
-const frontendDist = path.resolve(process.cwd(), "artifacts/polymarket-dashboard/dist/public");
-if (existsSync(frontendDist)) {
+// Serve built frontend — try several candidate paths to handle different CWDs
+const candidatePaths = [
+  path.resolve(process.cwd(), "artifacts/polymarket-dashboard/dist/public"),
+  path.resolve(process.cwd(), "../polymarket-dashboard/dist/public"),
+  path.resolve(__dirname, "../../polymarket-dashboard/dist/public"),
+];
+
+const frontendDist = candidatePaths.find(p => existsSync(p));
+
+if (frontendDist) {
+  logger.info({ frontendDist }, "Serving frontend from");
   app.use(express.static(frontendDist));
   app.get("*", (_req, res) => {
     res.sendFile(path.join(frontendDist, "index.html"));
+  });
+} else {
+  logger.warn({ tried: candidatePaths }, "Frontend dist not found, serving API only");
+  app.get("*", (_req, res) => {
+    res.status(200).json({ status: "ok", message: "Polymarket API is running. Frontend not found." });
   });
 }
 
